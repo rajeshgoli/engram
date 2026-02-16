@@ -7,11 +7,15 @@ FULL/STUB forms, and all 4 drift threshold types.
 from __future__ import annotations
 
 import json
+import logging
 import re
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 from engram.config import resolve_doc_paths
 from engram.fold.ids import IDAllocator, estimate_new_entities
@@ -88,8 +92,66 @@ def _extract_code_paths(section_text: str) -> list[str]:
     return paths
 
 
-def _find_orphaned_concepts(concepts_path: Path, project_root: Path) -> list[dict]:
-    """Find ACTIVE concepts whose referenced source files are all missing."""
+def _resolve_ref_commit(project_root: Path, fold_from: str) -> str | None:
+    """Resolve a fold_from date to the nearest git commit hash.
+
+    Uses ``git log --before=<date+1day> -1 --format=%H`` to find the
+    latest commit on or before the fold_from date.
+
+    Returns the commit hash, or None if no commit found.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "git", "log",
+                f"--before={fold_from}T23:59:59",
+                "-1", "--format=%H",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(project_root),
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
+
+
+def _file_exists_at_commit(
+    project_root: Path, ref_commit: str, path: str,
+) -> bool:
+    """Check if a file exists at a specific git commit.
+
+    Uses ``git ls-tree <commit> -- <path>`` — exit code 0 with output
+    means the file exists.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-tree", ref_commit, "--", path],
+            capture_output=True,
+            text=True,
+            cwd=str(project_root),
+            timeout=10,
+        )
+        return result.returncode == 0 and bool(result.stdout.strip())
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def _find_orphaned_concepts(
+    concepts_path: Path,
+    project_root: Path,
+    ref_commit: str | None = None,
+) -> list[dict]:
+    """Find ACTIVE concepts whose referenced source files are all missing.
+
+    When *ref_commit* is None (steady-state), uses ``os.path.exists()``
+    against the current filesystem.  When set (fold-forward), uses
+    ``_file_exists_at_commit()`` so only files missing at the reference
+    commit are flagged.
+    """
     if not concepts_path.exists():
         return []
     sections = parse_sections(concepts_path.read_text())
@@ -104,7 +166,18 @@ def _find_orphaned_concepts(concepts_path: Path, project_root: Path) -> list[dic
         code_paths = _extract_code_paths(sec["text"])
         if not code_paths:
             continue
-        if all(not (project_root / p).exists() for p in code_paths):
+
+        if ref_commit:
+            all_missing = all(
+                not _file_exists_at_commit(project_root, ref_commit, p)
+                for p in code_paths
+            )
+        else:
+            all_missing = all(
+                not (project_root / p).exists() for p in code_paths
+            )
+
+        if all_missing:
             orphans.append({
                 "name": sec["heading"].lstrip("#").strip(),
                 "id": extract_id(sec["heading"]),
@@ -177,13 +250,33 @@ def _find_workflow_repetitions(workflows_path: Path) -> list[dict]:
     return results
 
 
-def scan_drift(config: dict, project_root: Path) -> DriftReport:
-    """Scan all living docs for drift conditions."""
+def scan_drift(
+    config: dict,
+    project_root: Path,
+    fold_from: str | None = None,
+) -> DriftReport:
+    """Scan all living docs for drift conditions.
+
+    When *fold_from* is set, orphan detection checks file existence at
+    the git commit nearest to that date instead of the current filesystem.
+    """
     paths = resolve_doc_paths(config, project_root)
     thresholds = config.get("thresholds", {})
 
+    ref_commit: str | None = None
+    if fold_from:
+        ref_commit = _resolve_ref_commit(project_root, fold_from)
+        if ref_commit is None:
+            log.warning(
+                "Could not resolve fold_from=%s to a git commit; "
+                "falling back to filesystem check",
+                fold_from,
+            )
+
     return DriftReport(
-        orphaned_concepts=_find_orphaned_concepts(paths["concepts"], project_root),
+        orphaned_concepts=_find_orphaned_concepts(
+            paths["concepts"], project_root, ref_commit=ref_commit,
+        ),
         contested_claims=_find_claims_by_status(
             paths["epistemic"], "contested",
             thresholds.get("contested_review_days", 14),
@@ -270,8 +363,23 @@ def _render_item_content(item: dict[str, Any], project_root: Path) -> str:
 # ------------------------------------------------------------------
 
 
-def next_chunk(config: dict, project_root: Path) -> ChunkResult:
+def next_chunk(
+    config: dict,
+    project_root: Path,
+    fold_from: str | None = None,
+) -> ChunkResult:
     """Build the next chunk's input.md and prompt.txt.
+
+    Parameters
+    ----------
+    config:
+        Engram config dict.
+    project_root:
+        Project root directory.
+    fold_from:
+        Optional ISO date string.  When set, orphan detection uses the
+        git state at that date instead of the current filesystem, and the
+        triage prompt includes temporal context.
 
     Returns a ChunkResult with paths and metadata for CLI reporting.
 
@@ -302,9 +410,14 @@ def next_chunk(config: dict, project_root: Path) -> ChunkResult:
     budget, living_docs_chars = compute_budget(config, doc_paths)
 
     # Check drift priorities
-    drift = scan_drift(config, project_root)
+    drift = scan_drift(config, project_root, fold_from=fold_from)
     thresholds = config.get("thresholds", {})
     drift_type = drift.triggered(thresholds)
+
+    # Resolve ref_commit for temporal context in prompts
+    ref_commit: str | None = None
+    if fold_from:
+        ref_commit = _resolve_ref_commit(project_root, fold_from)
 
     if drift_type:
         # Drift triage chunk — queue is NOT consumed
@@ -317,6 +430,8 @@ def next_chunk(config: dict, project_root: Path) -> ChunkResult:
             drift_report=drift,
             chunk_id=chunk_id,
             doc_paths=doc_paths,
+            ref_commit=ref_commit,
+            ref_date=fold_from,
         )
 
         input_path = chunks_dir / f"chunk_{chunk_id:03d}_input.md"
@@ -397,6 +512,12 @@ def next_chunk(config: dict, project_root: Path) -> ChunkResult:
         orphan_advisory = (
             "## [ORPHANED CONCEPTS] Active concepts with missing source files\n\n"
         )
+        if fold_from and ref_commit:
+            orphan_advisory += (
+                f"**Note:** Living docs are current through {fold_from} "
+                f"(commit `{ref_commit[:12]}`). "
+                f"Only files missing at that commit are listed.\n\n"
+            )
         for o in drift.orphaned_concepts:
             orphan_advisory += f"- **{o['name']}**: {', '.join(o['paths'])}\n"
         orphan_advisory += (

@@ -40,6 +40,27 @@ is never a valid reason to skip triage. For each one:
 
 ({{ entry_count }} orphaned concepts to resolve)
 
+{% if ref_commit %}
+## Temporal Context
+
+Living docs are current through **{{ ref_date }}** (commit `{{ ref_commit[:12] }}`).
+Check file existence at that commit, NOT today's filesystem.
+
+To inspect files at the reference point:
+```
+git worktree add /tmp/engram-triage-{{ ref_commit[:8] }} {{ ref_commit }}
+```
+
+Check paths in that worktree. When done:
+```
+git worktree remove /tmp/engram-triage-{{ ref_commit[:8] }}
+```
+
+If a file exists at that commit but is missing today, it was renamed/moved AFTER
+the date living docs know about — leave it ACTIVE. The fold will process the
+rename when it reaches that date in the queue.
+{% endif %}
+
 **Goal: get orphan count to 0.** Every entry must be resolved.
 {% elif drift_type == "contested_review" %}
 # Contested Claims Review (Chunk {{ chunk_id }})

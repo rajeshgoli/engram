@@ -452,27 +452,23 @@ class TestInitializeCounters:
 class TestFoldMarker:
 
     def test_sets_marker_in_sqlite(self, tmp_path):
+        from engram.server.db import ServerDB
+
         db_path = tmp_path / "engram.db"
         set_fold_marker(db_path, date(2026, 1, 1))
 
-        conn = sqlite3.connect(str(db_path))
-        row = conn.execute(
-            "SELECT value FROM server_state WHERE key = 'fold_from'"
-        ).fetchone()
-        conn.close()
-        assert row[0] == "2026-01-01"
+        db = ServerDB(db_path)
+        assert db.get_fold_from() == "2026-01-01"
 
     def test_updates_existing_marker(self, tmp_path):
+        from engram.server.db import ServerDB
+
         db_path = tmp_path / "engram.db"
         set_fold_marker(db_path, date(2026, 1, 1))
         set_fold_marker(db_path, date(2026, 2, 15))
 
-        conn = sqlite3.connect(str(db_path))
-        row = conn.execute(
-            "SELECT value FROM server_state WHERE key = 'fold_from'"
-        ).fetchone()
-        conn.close()
-        assert row[0] == "2026-02-15"
+        db = ServerDB(db_path)
+        assert db.get_fold_from() == "2026-02-15"
 
 
 # ---------------------------------------------------------------------------
@@ -552,16 +548,14 @@ class TestMigrate:
         assert rows["E"] == counters["E"]
 
     def test_fold_from_marker_set(self, tmp_path):
+        from engram.server.db import ServerDB
+
         project = _create_project(tmp_path)
         migrate(project, fold_from=date(2026, 1, 1))
 
         db_path = project / ".engram" / "engram.db"
-        conn = sqlite3.connect(str(db_path))
-        row = conn.execute(
-            "SELECT value FROM server_state WHERE key = 'fold_from'"
-        ).fetchone()
-        conn.close()
-        assert row[0] == "2026-01-01"
+        db = ServerDB(db_path)
+        assert db.get_fold_from() == "2026-01-01"
 
     def test_idempotent(self, tmp_path):
         """Running migration twice produces the same result."""

@@ -23,6 +23,7 @@ from engram.dispatch import invoke_agent, read_docs
 from engram.fold.chunker import ChunkResult, next_chunk
 from engram.fold.queue import build_queue
 from engram.linter import lint_post_dispatch
+from engram.server.db import ServerDB
 
 log = logging.getLogger(__name__)
 
@@ -170,6 +171,8 @@ def forward_fold(
     remaining = _filter_queue_by_date(project_root, from_date)
     if remaining == 0:
         log.info("No entries to process after %s", from_date)
+        db = ServerDB(project_root / ".engram" / "engram.db")
+        db.clear_fold_from()
         return True
 
     log.info("Processing %d entries from %s forward", remaining, from_date)
@@ -180,7 +183,7 @@ def forward_fold(
 
     while True:
         try:
-            chunk = next_chunk(config, project_root)
+            chunk = next_chunk(config, project_root, fold_from=from_date.isoformat())
         except FileNotFoundError:
             log.warning("Queue file not found — stopping")
             break
@@ -209,5 +212,7 @@ def forward_fold(
         log.warning("Forward fold completed with %d failed chunk(s)", failures)
         return False
 
+    db = ServerDB(project_root / ".engram" / "engram.db")
+    db.clear_fold_from()
     log.info("Forward fold completed successfully (%d chunks)", chunk_count)
     return True

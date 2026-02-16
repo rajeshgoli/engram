@@ -54,6 +54,9 @@ class ServerDB:
     def _init_tables(self) -> None:
         conn = self._connect()
         try:
+            # Detect and rebuild legacy key-value server_state from migrate.py
+            legacy_fold_from = self._migrate_legacy_server_state(conn)
+
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS buffer_items (
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,13 +90,54 @@ class ServerDB:
                     last_session_mtime  REAL
                 );
             """)
+
+            # Add fold_from column (idempotent)
+            try:
+                conn.execute("ALTER TABLE server_state ADD COLUMN fold_from TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
             # Ensure singleton row exists
             conn.execute(
                 "INSERT OR IGNORE INTO server_state (id, buffer_chars_total) VALUES (1, 0)"
             )
+
+            # Restore fold_from from legacy migration if present
+            if legacy_fold_from:
+                conn.execute(
+                    "UPDATE server_state SET fold_from = ? WHERE id = 1",
+                    (legacy_fold_from,),
+                )
+
             conn.commit()
         finally:
             conn.close()
+
+    def _migrate_legacy_server_state(
+        self, conn: sqlite3.Connection,
+    ) -> str | None:
+        """Detect and remove legacy key-value server_state schema.
+
+        The legacy schema ``(key TEXT, value TEXT)`` was created by
+        ``migrate.py:set_fold_marker()``.  If detected, extracts the
+        ``fold_from`` value, drops the table, and returns the value so
+        ``_init_tables`` can restore it after creating the correct schema.
+        """
+        rows = conn.execute("PRAGMA table_info(server_state)").fetchall()
+        if not rows:
+            return None  # Table doesn't exist yet
+        col_names = {r[1] for r in rows}
+        if "key" not in col_names or "id" in col_names:
+            return None  # Already singleton schema
+
+        # Legacy key-value schema — extract fold_from before dropping
+        row = conn.execute(
+            "SELECT value FROM server_state WHERE key = 'fold_from'"
+        ).fetchone()
+        legacy_fold_from = row[0] if row else None
+        conn.execute("DROP TABLE server_state")
+        conn.commit()
+        return legacy_fold_from
 
     # ------------------------------------------------------------------
     # Context manager
@@ -353,6 +397,40 @@ class ServerDB:
                 "SELECT * FROM server_state WHERE id = 1"
             ).fetchone()
             return dict(row) if row else {"buffer_chars_total": 0}
+        finally:
+            conn.close()
+
+    def set_fold_from(self, fold_date: str) -> None:
+        """Set the fold_from marker (ISO date string)."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE server_state SET fold_from = ? WHERE id = 1",
+                (fold_date,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_fold_from(self) -> str | None:
+        """Return the fold_from marker, or None if not set."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT fold_from FROM server_state WHERE id = 1"
+            ).fetchone()
+            return row["fold_from"] if row else None
+        finally:
+            conn.close()
+
+    def clear_fold_from(self) -> None:
+        """Clear the fold_from marker (set to NULL)."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE server_state SET fold_from = NULL WHERE id = 1"
+            )
+            conn.commit()
         finally:
             conn.close()
 

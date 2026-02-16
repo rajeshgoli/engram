@@ -66,7 +66,8 @@ class Dispatcher:
 
         # Build the chunk
         try:
-            chunk = next_chunk(self._config, self._project_root)
+            fold_from = self._db.get_fold_from()
+            chunk = next_chunk(self._config, self._project_root, fold_from=fold_from)
         except (FileNotFoundError, ValueError) as exc:
             log.warning("Cannot build chunk: %s", exc)
             return False
