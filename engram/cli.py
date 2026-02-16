@@ -262,8 +262,6 @@ def lint(project_root: str) -> None:
 )
 def migrate(project_root: str, fold_from: object) -> None:
     """Migrate v2 living docs to v3 format (one-time)."""
-    from datetime import date as date_type
-
     from engram.migrate import migrate as run_migrate
 
     root = Path(project_root)

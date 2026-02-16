@@ -14,9 +14,9 @@ import pytest
 import yaml
 
 from engram.cli import GRAVEYARD_HEADERS, LIVING_DOC_HEADERS
+from engram.compact.graveyard import compact_living_doc
 from engram.migrate import (
     backfill_ids,
-    bootstrap_graveyard,
     extract_workflows,
     initialize_counters,
     migrate,
@@ -308,7 +308,9 @@ class TestExtractWorkflows:
 # Phase 3: Graveyard bootstrapping
 # ---------------------------------------------------------------------------
 
-class TestBootstrapGraveyard:
+class TestGraveyardBootstrapping:
+    """Tests that compact_living_doc (from compact/graveyard.py) works
+    correctly in the migration context."""
 
     def test_moves_dead_to_graveyard(self, tmp_path):
         gy_path = tmp_path / "concept_graveyard.md"
@@ -324,7 +326,7 @@ class TestBootstrapGraveyard:
 ## C002: check_level_hits (ACTIVE)
 - **Code:** `level_tracking.py`
 """
-        result = bootstrap_graveyard(content, "concepts", gy_path)
+        result, _ = compact_living_doc(content, "concepts", gy_path)
 
         # Living doc should have stub
         sections = parse_sections(result)
@@ -348,7 +350,7 @@ class TestBootstrapGraveyard:
 ## C001: check_level_hits (ACTIVE)
 - **Code:** `level_tracking.py`
 """
-        result = bootstrap_graveyard(content, "concepts", gy_path)
+        result, _ = compact_living_doc(content, "concepts", gy_path)
 
         sections = parse_sections(result)
         assert len(sections) == 1
@@ -368,7 +370,7 @@ class TestBootstrapGraveyard:
 ## E002: tick_level_edge (unverified)
 - **Evidence:** Needs broker data.
 """
-        result = bootstrap_graveyard(content, "epistemic", gy_path)
+        result, _ = compact_living_doc(content, "epistemic", gy_path)
 
         sections = parse_sections(result)
         refuted = [s for s in sections if "74_percent" in s["heading"]]
@@ -570,16 +572,22 @@ class TestMigrate:
         concepts_1 = (project / "docs" / "concept_registry.md").read_text()
         epistemic_1 = (project / "docs" / "epistemic_state.md").read_text()
         workflows_1 = (project / "docs" / "workflow_registry.md").read_text()
+        gy_concepts_1 = (project / "docs" / "concept_graveyard.md").read_text()
+        gy_epistemic_1 = (project / "docs" / "epistemic_graveyard.md").read_text()
 
         # Second run
         migrate(project)
         concepts_2 = (project / "docs" / "concept_registry.md").read_text()
         epistemic_2 = (project / "docs" / "epistemic_state.md").read_text()
         workflows_2 = (project / "docs" / "workflow_registry.md").read_text()
+        gy_concepts_2 = (project / "docs" / "concept_graveyard.md").read_text()
+        gy_epistemic_2 = (project / "docs" / "epistemic_graveyard.md").read_text()
 
         assert concepts_1 == concepts_2
         assert epistemic_1 == epistemic_2
         assert workflows_1 == workflows_2
+        assert gy_concepts_1 == gy_concepts_2
+        assert gy_epistemic_1 == gy_epistemic_2
 
     def test_idempotent_counters(self, tmp_path):
         """Counter values are the same after two runs."""

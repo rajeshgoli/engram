@@ -20,17 +20,13 @@ import re
 import sqlite3
 from datetime import date
 from pathlib import Path
-from typing import Any
 
 from engram.cli import GRAVEYARD_HEADERS, LIVING_DOC_HEADERS
+from engram.compact.graveyard import compact_living_doc
 from engram.config import load_config, resolve_doc_paths
-from engram.fold.ids import IDAllocator
 from engram.linter import LintResult, lint
 from engram.parse import (
-    STABLE_ID_RE,
-    Section,
     extract_id,
-    is_stub,
     parse_sections,
 )
 
@@ -47,27 +43,11 @@ _WORKFLOW_FIELDS = re.compile(
     re.MULTILINE,
 )
 
-# Concept indicator fields
-_CONCEPT_FIELDS = re.compile(
-    r'^\s*-?\s*\*?\*?Code\*?\*?:',
-    re.MULTILINE,
-)
-
-# Epistemic indicator fields
-_EPISTEMIC_FIELDS = re.compile(
-    r'^\s*-?\s*\*?\*?(?:Evidence|History)\*?\*?:',
-    re.MULTILINE,
-)
-
-# Statuses that map to graveyard-eligible entries
-_CONCEPT_GRAVEYARD_STATUSES = {"dead", "evolved"}
-_EPISTEMIC_GRAVEYARD_STATUSES = {"refuted"}
-_WORKFLOW_GRAVEYARD_STATUSES = {"superseded", "merged"}
-
 # Status normalization: v2 status text → v3 canonical status
 _CONCEPT_STATUS_MAP = {
     "active": "ACTIVE",
     "dead": "DEAD",
+    "evolved": "EVOLVED",
 }
 
 _EPISTEMIC_STATUS_MAP = {
@@ -97,69 +77,9 @@ def _normalize_status(status_raw: str, doc_type: str) -> str:
     return status_raw.strip()
 
 
-def _section_needs_id(section: Section) -> bool:
-    """Check if a section is a v2 entry that needs an ID assigned."""
-    heading = section["heading"]
-    # Already has stable ID
-    if extract_id(heading):
-        return False
-    # Already a stub with ID
-    if is_stub(heading):
-        return False
-    # Must match v2 heading pattern
-    return bool(_V2_HEADING_RE.match(heading))
-
-
-def _classify_entry(section: Section, source_doc: str) -> str:
-    """Classify a v2 entry as concept, epistemic, or workflow.
-
-    Uses field heuristics: entries with Context:/Current method:/Trigger:
-    are workflows. Entries with Code: are concepts. Entries with
-    Evidence:/History: are epistemic. Falls back to source doc type.
-    """
-    body = section["text"]
-
-    if _WORKFLOW_FIELDS.search(body):
-        return "workflows"
-    if source_doc == "concepts" and _CONCEPT_FIELDS.search(body):
-        return "concepts"
-    if source_doc == "epistemic" and _EPISTEMIC_FIELDS.search(body):
-        return "epistemic"
-
-    # Default to source doc type
-    return source_doc
-
-
 def _id_prefix_for_type(doc_type: str) -> str:
     """Return the ID prefix for a doc type."""
     return {"concepts": "C", "epistemic": "E", "workflows": "W"}[doc_type]
-
-
-def _graveyard_statuses(doc_type: str) -> set[str]:
-    """Return the set of statuses that trigger graveyard moves."""
-    return {
-        "concepts": _CONCEPT_GRAVEYARD_STATUSES,
-        "epistemic": _EPISTEMIC_GRAVEYARD_STATUSES,
-        "workflows": _WORKFLOW_GRAVEYARD_STATUSES,
-    }.get(doc_type, set())
-
-
-def _graveyard_filename(doc_type: str) -> str:
-    """Return the graveyard filename for a doc type."""
-    return {
-        "concepts": "concept_graveyard.md",
-        "epistemic": "epistemic_graveyard.md",
-    }.get(doc_type, "")
-
-
-def _build_stub_line(entry_id: str, name: str, status: str, graveyard_file: str) -> str:
-    """Build a STUB heading line."""
-    return f"## {entry_id}: {name} ({status}) \u2192 {graveyard_file}#{entry_id}"
-
-
-def _build_full_heading(entry_id: str, name: str, status: str) -> str:
-    """Build a FULL entry heading line."""
-    return f"## {entry_id}: {name} ({status})"
 
 
 # ------------------------------------------------------------------
@@ -341,83 +261,6 @@ def extract_workflows(
 
 
 # ------------------------------------------------------------------
-# Phase 3: Graveyard bootstrapping
-# ------------------------------------------------------------------
-
-def bootstrap_graveyard(
-    content: str,
-    doc_type: str,
-    graveyard_path: Path,
-) -> str:
-    """Move DEAD/refuted entries to graveyard files, leave STUBs.
-
-    Parameters
-    ----------
-    content:
-        Living doc content (already has stable IDs from phase 1).
-    doc_type:
-        One of "concepts", "epistemic".
-    graveyard_path:
-        Path to the graveyard file.
-
-    Returns
-    -------
-    str
-        Updated living doc content with STUBs replacing moved entries.
-    """
-    if doc_type not in ("concepts", "epistemic"):
-        return content
-
-    eligible_statuses = _graveyard_statuses(doc_type)
-    graveyard_file = graveyard_path.name
-    sections = parse_sections(content)
-    if not sections:
-        return content
-
-    lines = content.split("\n")
-    first_start = sections[0]["start"]
-    new_lines = list(lines[:first_start])
-
-    for sec in sections:
-        heading = sec["heading"]
-
-        # Already a stub — keep as-is
-        if is_stub(heading):
-            sec_lines = sec["text"].split("\n")
-            new_lines.extend(sec_lines)
-            continue
-
-        entry_id = extract_id(heading)
-        status = sec.get("status")
-
-        if status and status in eligible_statuses and entry_id:
-            # Move to graveyard
-            entry_text = sec["text"].rstrip("\n")
-            separator = "\n\n" if graveyard_path.exists() and graveyard_path.stat().st_size > 0 else ""
-            with open(graveyard_path, "a") as f:
-                f.write(f"{separator}{entry_text}\n")
-
-            # Extract name from heading
-            m = re.match(r'^##\s+[CEW]\d{3,}:\s+(.+?)\s*\(([^)]+)\)', heading)
-            if m:
-                name = m.group(1).strip()
-                status_text = m.group(2).strip()
-                stub = _build_stub_line(entry_id, name, status_text, graveyard_file)
-                new_lines.append(stub)
-                new_lines.append("")  # Blank line after stub
-            else:
-                # Can't parse — keep as-is
-                sec_lines = sec["text"].split("\n")
-                new_lines.extend(sec_lines)
-        else:
-            # Keep full entry
-            sec_lines = sec["text"].split("\n")
-            new_lines.extend(sec_lines)
-
-    return "\n".join(new_lines)
-
-
-# ------------------------------------------------------------------
 # Phase 4: Cross-reference rewrite
 # ------------------------------------------------------------------
 
@@ -530,18 +373,26 @@ def initialize_counters(
     # Set counters to max + 1
     next_ids = {cat: max_val + 1 for cat, max_val in max_ids.items()}
 
-    with IDAllocator(db_path) as alloc:
-        conn = alloc._connect()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            for cat, next_id in next_ids.items():
-                conn.execute(
-                    "INSERT OR REPLACE INTO id_counters (category, next_id) VALUES (?, ?)",
-                    (cat, next_id),
-                )
-            conn.commit()
-        finally:
-            conn.close()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS id_counters (
+                category TEXT PRIMARY KEY,
+                next_id  INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        for cat, next_id in next_ids.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO id_counters (category, next_id) VALUES (?, ?)",
+                (cat, next_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
     return next_ids
 
@@ -661,9 +512,9 @@ def migrate(
     )
     all_name_to_id.update(wf_existing_map)
 
-    # Phase 3: Graveyard bootstrapping
+    # Phase 3: Graveyard bootstrapping (reuses compact/graveyard.py)
     for doc_type, gy_key in [("concepts", "concept_graveyard"), ("epistemic", "epistemic_graveyard")]:
-        docs[doc_type] = bootstrap_graveyard(
+        docs[doc_type], _ = compact_living_doc(
             docs[doc_type], doc_type, paths[gy_key],
         )
 
