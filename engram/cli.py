@@ -172,3 +172,31 @@ def build_queue_cmd(project_root: str) -> None:
         first = entries[0]["date"][:10]
         last = entries[-1]["date"][:10]
         click.echo(f"  Date range: {first} to {last}")
+
+
+@cli.command()
+@click.option(
+    "--project-root",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    default=".",
+    help="Project root directory (default: cwd).",
+)
+def lint(project_root: str) -> None:
+    """Validate living docs against schema rules."""
+    from engram.config import load_config
+    from engram.linter import lint_from_paths
+
+    root = Path(project_root)
+    config = load_config(root)
+    result = lint_from_paths(root, config)
+
+    if result.passed:
+        click.echo("Lint: PASS (0 violations)")
+    else:
+        click.echo(f"Lint: FAIL ({len(result.violations)} violations)")
+        for v in result.violations:
+            loc = v.doc_type
+            if v.entry_id:
+                loc += f"/{v.entry_id}"
+            click.echo(f"  [{loc}] {v.message}")
+        raise SystemExit(1)
