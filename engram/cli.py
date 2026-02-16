@@ -174,6 +174,51 @@ def build_queue_cmd(project_root: str) -> None:
         click.echo(f"  Date range: {first} to {last}")
 
 
+@cli.command("next-chunk")
+@click.option(
+    "--project-root",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    default=".",
+    help="Project root directory (default: cwd).",
+)
+def next_chunk_cmd(project_root: str) -> None:
+    """Build the next chunk input and prompt files."""
+    from engram.config import load_config
+    from engram.fold.chunker import next_chunk
+
+    root = Path(project_root)
+    config = load_config(root)
+
+    try:
+        result = next_chunk(config, root)
+    except FileNotFoundError as exc:
+        click.echo(str(exc))
+        raise SystemExit(1)
+    except ValueError as exc:
+        click.echo(str(exc))
+        raise SystemExit(0)
+
+    click.echo(f"Chunk {result.chunk_id}:")
+    click.echo(f"  Type: {result.chunk_type}")
+    click.echo(f"  Living docs: {result.living_docs_chars:,} chars")
+    click.echo(f"  Budget: {result.budget:,} chars")
+
+    if result.chunk_type == "fold":
+        click.echo(f"  Items: {result.items_count}")
+        click.echo(f"  Chunk chars: {result.chunk_chars:,}")
+        click.echo(f"  Date range: {result.date_range}")
+        if result.pre_assigned_ids:
+            for cat, ids in result.pre_assigned_ids.items():
+                click.echo(f"  Pre-assigned {cat}: {ids}")
+    else:
+        click.echo(f"  Drift entries: {result.drift_entry_count}")
+        click.echo("  ** Drift triage round — no queue items consumed **")
+
+    click.echo(f"  Written: {result.input_path}")
+    click.echo(f"  Prompt: {result.prompt_path}")
+    click.echo(f"  Remaining in queue: {result.remaining_queue}")
+
+
 @cli.command()
 @click.option(
     "--project-root",
