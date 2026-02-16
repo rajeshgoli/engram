@@ -42,9 +42,10 @@ The v2 script (992 lines, `dev` branch) breaks into three categories:
 
 | Item | Why |
 |------|-----|
-| `HISTORY_FILE` / prompt session parsing | Claude Code history.jsonl — project-specific source type |
-| `PROJECT_PATHS` filter | Hardcoded project names |
+| `PROJECT_PATHS` filter | Replaced by config `sessions.project_match` |
 | All hardcoded paths (`WORKTREE_PATH`, `LIVING_DOCS`, etc.) | Replaced by config |
+
+Note: `HISTORY_FILE` / prompt session parsing (v2 lines 432-497) was previously listed as dead. **Restored to port scope** — user prompts are the most information-dense source of epistemic state (decisions, corrections, rationale). Ported as a pluggable session adapter in #4 with Claude Code as built-in format.
 
 ---
 
@@ -69,8 +70,9 @@ engram/
 │   │   ├── queue.py         # Chronological queue building (from v2 build_queue)
 │   │   ├── chunker.py       # Chunk assembly with drift priority (from v2 next_chunk)
 │   │   ├── prompt.py        # Prompt template rendering (Jinja2)
-│   │   ├── ids.py           # Stable ID allocation (monotonic counter, filelock)
-│   │   └── sources.py       # Issue pulling, git dates, frontmatter parsing (from v2)
+│   │   ├── ids.py           # Stable ID allocation (monotonic counter, SQLite)
+│   │   ├── sources.py       # Issue pulling, git dates, frontmatter parsing (from v2)
+│   │   └── sessions.py      # Session history adapters (claude-code, codex)
 │   ├── linter/
 │   │   ├── __init__.py
 │   │   ├── schema.py        # FULL/STUB heading validation per doc type
@@ -111,7 +113,7 @@ engram/
 
 Set up the Python package:
 - `pyproject.toml` with click, pyyaml, watchdog, jinja2, filelock dependencies
-- `engram/config.py`: load `.engram/config.yaml`, validate required fields, provide defaults. No `sessions` source type in v3 config — deferred to future ticket pending generic session format definition.
+- `engram/config.py`: load `.engram/config.yaml`, validate required fields, provide defaults. Sessions config includes `format` (built-in: `claude-code`, `codex`), `path`, and `project_match` fields.
 - `engram/cli.py`: skeleton with `engram init` (creates `.engram/` dir + config template + empty living docs)
 - `engram/parse.py`: shared markdown parsing — `_parse_sections()` (port from v2 lines 583-614) and heading regex utilities. This is the foundation module used by both linter (#6) and compaction (#7).
 - Example config at `examples/config.yaml`
@@ -128,13 +130,16 @@ Set up the Python package:
 
 Port the artifact ingestion pipeline:
 - `engram/fold/sources.py`: `pull_issues()`, `_render_issue_markdown()`, `_get_doc_git_dates()`, `_parse_frontmatter_date()`, `_extract_issue_number()`, `_parse_date()`, `_git_diff_summary()` (new — v2 has this at lines 526-580 on `dev`)
-- `engram/fold/queue.py`: `build_queue()` — parameterized by config, outputs JSONL
+- `engram/fold/sessions.py`: pluggable session adapter interface. Built-in adapters:
+  - `claude-code`: parse `~/.claude/history.jsonl`, group by session, filter by `project_match` config, render as markdown (port from v2 lines 432-497). User prompts are the most information-dense source — they carry decisions, corrections, and rationale that no other artifact captures.
+  - `codex`: parse Codex session history (format TBD, stub adapter)
+- `engram/fold/queue.py`: `build_queue()` — parameterized by config, outputs JSONL. Includes session entries alongside docs and issues.
 - All paths from config, no hardcoded values
 - CLI command: `engram build-queue`
 
-**Port from v2 (`dev` branch):** `pull_issues` (lines 239-263), `build_queue` (lines 332-523), date/git helper functions (lines 266-329), `_git_diff_summary` (lines 526-580). Drop `HISTORY_FILE` / prompt session parsing (lines 431-497) and `PROJECT_PATHS` filter (line 68) — both fractal-specific. Sessions ingestion deferred to future ticket.
+**Port from v2 (`dev` branch):** `pull_issues` (lines 239-263), `build_queue` (lines 332-523), date/git helper functions (lines 266-329), `_git_diff_summary` (lines 526-580), session parsing (lines 432-497) parameterized via config `sessions.project_match` (replaces hardcoded `PROJECT_PATHS` filter at line 68).
 
-**Acceptance:** `engram build-queue` on a test repo produces correct JSONL. `python -m pytest tests/test_queue.py tests/test_sources.py` passes.
+**Acceptance:** `engram build-queue` on a test repo produces correct JSONL including session entries. Claude Code history adapter correctly filters by project, groups by session, renders prompts as markdown. `python -m pytest tests/test_queue.py tests/test_sources.py` passes.
 
 ---
 

@@ -535,7 +535,11 @@ sources:
     - docs/working/
     - docs/archive/
     - docs/specs/
-  # sessions: deferred — requires generic session format definition
+  sessions:
+    format: claude-code           # Built-in: claude-code, codex. Extensible.
+    path: ~/.claude/history.jsonl  # Default for claude-code format
+    project_match:                 # Filter sessions to this project (substring match on project path)
+      - my-project
 
 thresholds:
   orphan_triage: 50
