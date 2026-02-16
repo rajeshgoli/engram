@@ -24,19 +24,13 @@ _GRAVEYARD_STATUSES: dict[str, set[str]] = {
     "epistemic": {"refuted"},
 }
 
-# Maps doc_type to default graveyard filename
-_GRAVEYARD_FILES: dict[str, str] = {
-    "concepts": "concept_graveyard.md",
-    "epistemic": "epistemic_graveyard.md",
-}
-
 # File patterns to search for orphaned source references
 _DEFAULT_SOURCE_PATTERNS = [
     r'(?:src|tests|lib|engram|frontend)/[\w/._-]+\.(?:py|ts|tsx|js|html)',
 ]
 
 
-def generate_stub(section: Section, doc_type: str, graveyard_filename: str) -> str:
+def generate_stub(section: Section, graveyard_filename: str) -> str:
     """Generate a one-liner STUB heading for a compacted entry.
 
     The STUB conforms to linter schema rules: heading + arrow pointer only.
@@ -45,8 +39,6 @@ def generate_stub(section: Section, doc_type: str, graveyard_filename: str) -> s
     ----------
     section:
         The parsed section being moved to graveyard.
-    doc_type:
-        One of ``concepts`` or ``epistemic``.
     graveyard_filename:
         Basename of the graveyard file (e.g., ``concept_graveyard.md``).
 
@@ -107,7 +99,7 @@ def move_to_graveyard(
         )
 
     graveyard_filename = graveyard_path.name
-    stub = generate_stub(section, doc_type, graveyard_filename)
+    stub = generate_stub(section, graveyard_filename)
 
     # Append full entry to graveyard (append-only)
     entry_text = section["text"].rstrip("\n")
@@ -223,10 +215,11 @@ def compact_living_doc(
 
         status = sec.get("status")
         if status in eligible_statuses:
-            # Move to graveyard
+            # Move to graveyard — add trailing blank line to maintain
+            # valid markdown structure between sections
             stub = move_to_graveyard(sec, doc_type, graveyard_path)
-            parts.append(stub)
-            chars_saved += len(sec["text"]) - len(stub)
+            parts.append(stub + "\n")
+            chars_saved += len(sec["text"]) - len(stub) - 1
         else:
             # Keep full text
             parts.append(sec["text"])
@@ -239,7 +232,7 @@ def find_orphaned_concepts(
     registry_content: str,
     project_root: Path,
     source_patterns: list[str] | None = None,
-) -> list[dict[str, list[str]]]:
+) -> list[dict[str, str | list[str]]]:
     """Find ACTIVE concepts whose referenced source files no longer exist.
 
     Ported from v2 ``_find_orphaned_concepts()`` (lines 628-663),
@@ -266,7 +259,7 @@ def find_orphaned_concepts(
         source_patterns = _DEFAULT_SOURCE_PATTERNS
 
     combined_pattern = "|".join(source_patterns)
-    orphans: list[dict[str, list[str]]] = []
+    orphans: list[dict[str, str | list[str]]] = []
 
     for sec in sections:
         # Skip non-active entries

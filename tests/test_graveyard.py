@@ -68,17 +68,17 @@ EPISTEMIC_REFUTED = Section(
 
 class TestGenerateStub:
     def test_concept_dead_stub(self):
-        stub = generate_stub(CONCEPT_DEAD, "concepts", "concept_graveyard.md")
+        stub = generate_stub(CONCEPT_DEAD, "concept_graveyard.md")
         assert stub == "## C042: proximity_pruning (DEAD) \u2192 concept_graveyard.md#C042"
         assert is_stub(stub)
 
     def test_concept_evolved_stub(self):
-        stub = generate_stub(CONCEPT_EVOLVED, "concepts", "concept_graveyard.md")
+        stub = generate_stub(CONCEPT_EVOLVED, "concept_graveyard.md")
         assert stub == "## C015: fractal_detector (EVOLVED \u2192 C089) \u2192 concept_graveyard.md#C015"
         assert is_stub(stub)
 
     def test_epistemic_refuted_stub(self):
-        stub = generate_stub(EPISTEMIC_REFUTED, "epistemic", "epistemic_graveyard.md")
+        stub = generate_stub(EPISTEMIC_REFUTED, "epistemic_graveyard.md")
         assert stub == "## E007: mean_reversion_dominant (refuted) \u2192 epistemic_graveyard.md#E007"
         assert is_stub(stub)
 
@@ -90,7 +90,7 @@ class TestGenerateStub:
             text="## Some Heading Without ID",
         )
         with pytest.raises(ValueError, match="no stable ID"):
-            generate_stub(bad_section, "concepts", "concept_graveyard.md")
+            generate_stub(bad_section, "concept_graveyard.md")
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +260,8 @@ class TestCompactLivingDoc:
         # Active entries preserved
         assert "src/active.py" in new_content
         assert "src/another.py" in new_content
+        # Blank line separator preserved between STUB and next section
+        assert "\n\n## C050:" in new_content
         # Dead entry's full content NOT in living doc
         assert "No longer needed" not in new_content
         # But IS in graveyard

@@ -171,10 +171,11 @@ def compact_timeline(
         if is_phase:
             end_date = _parse_phase_end_date(sec["heading"])
             if end_date and end_date < cutoff:
-                # Collapse to summary
+                # Collapse to summary — add trailing blank line to maintain
+                # valid markdown structure between sections
                 summary = _summarize_phase(sec["text"], sec["heading"])
-                parts.append(summary)
-                chars_saved += len(sec["text"]) - len(summary)
+                parts.append(summary + "\n")
+                chars_saved += len(sec["text"]) - len(summary) - 1
                 continue
 
         # Keep as-is
