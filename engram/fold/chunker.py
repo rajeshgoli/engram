@@ -34,6 +34,7 @@ class DriftReport:
     contested_claims: list[dict] = field(default_factory=list)
     stale_unverified: list[dict] = field(default_factory=list)
     workflow_repetitions: list[dict] = field(default_factory=list)
+    ref_commit: str | None = None
 
     def triggered(self, thresholds: dict) -> str | None:
         """Return the highest-priority drift type that exceeds its threshold.
@@ -311,6 +312,7 @@ def scan_drift(
             thresholds.get("stale_unverified_days", 30),
         ),
         workflow_repetitions=_find_workflow_repetitions(paths["workflows"]),
+        ref_commit=ref_commit,
     )
 
 
@@ -439,10 +441,8 @@ def next_chunk(
     thresholds = config.get("thresholds", {})
     drift_type = drift.triggered(thresholds)
 
-    # Resolve ref_commit for temporal context in prompts
-    ref_commit: str | None = None
-    if fold_from:
-        ref_commit = _resolve_ref_commit(project_root, fold_from)
+    # Reuse ref_commit resolved by scan_drift (avoids duplicate git call)
+    ref_commit = drift.ref_commit
 
     if drift_type:
         # Drift triage chunk — queue is NOT consumed
