@@ -138,3 +138,37 @@ def init(project_root: str) -> None:
         click.echo(f"Created {doc_path}")
 
     click.echo("\nEngram initialized. Edit .engram/config.yaml to customize paths.")
+
+
+@cli.command("build-queue")
+@click.option(
+    "--project-root",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    default=".",
+    help="Project root directory (default: cwd).",
+)
+def build_queue_cmd(project_root: str) -> None:
+    """Build chronological queue of all project artifacts."""
+    from engram.config import load_config
+    from engram.fold.queue import build_queue
+
+    root = Path(project_root)
+    config = load_config(root)
+    entries = build_queue(config, root)
+
+    doc_count = sum(1 for e in entries if e["type"] == "doc")
+    revisit_count = sum(
+        1 for e in entries if e["type"] == "doc" and e["pass"] == "revisit"
+    )
+    issue_count = sum(1 for e in entries if e["type"] == "issue")
+    session_count = sum(1 for e in entries if e["type"] == "prompts")
+
+    click.echo(f"Built queue: {len(entries)} entries")
+    click.echo(f"  Docs: {doc_count} ({revisit_count} revisits)")
+    click.echo(f"  Issues: {issue_count}")
+    click.echo(f"  Sessions: {session_count}")
+
+    if entries:
+        first = entries[0]["date"][:10]
+        last = entries[-1]["date"][:10]
+        click.echo(f"  Date range: {first} to {last}")

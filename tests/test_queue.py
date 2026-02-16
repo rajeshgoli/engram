@@ -1,0 +1,293 @@
+"""Tests for engram.fold.queue."""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+import yaml
+
+from engram.config import DEFAULTS, _deep_merge
+from engram.fold.queue import REVISIT_THRESHOLD_DAYS, build_queue
+
+
+@pytest.fixture
+def project(tmp_path: Path) -> Path:
+    """Create a minimal project with .engram config, docs, and issues."""
+    root = tmp_path / "project"
+    root.mkdir()
+
+    # Create .engram/config.yaml
+    engram_dir = root / ".engram"
+    engram_dir.mkdir()
+
+    config = {
+        "sources": {
+            "issues": "issues/",
+            "docs": ["docs/working/"],
+            "sessions": {
+                "format": "claude-code",
+                "path": str(tmp_path / "history.jsonl"),
+                "project_match": ["project"],
+            },
+        },
+    }
+    (engram_dir / "config.yaml").write_text(yaml.dump(config))
+
+    # Create doc dirs
+    working = root / "docs" / "working"
+    working.mkdir(parents=True)
+
+    # Create issues dir
+    issues = root / "issues"
+    issues.mkdir()
+
+    return root
+
+
+def _make_config(project: Path, overrides: dict | None = None) -> dict:
+    """Build a full config dict with optional overrides."""
+    base = {
+        "sources": {
+            "issues": "issues/",
+            "docs": ["docs/working/"],
+            "sessions": {
+                "format": "claude-code",
+                "path": str(project.parent / "history.jsonl"),
+                "project_match": [],
+            },
+        },
+    }
+    if overrides:
+        base = _deep_merge(base, overrides)
+    return _deep_merge(DEFAULTS, base)
+
+
+def _mock_git_run(cmd, **kwargs):
+    """Mock subprocess.run for git commands — returns empty/no-op."""
+    return type("Result", (), {"stdout": "\n", "returncode": 0})()
+
+
+class TestBuildQueueDocs:
+    def test_includes_doc_entries(self, project: Path) -> None:
+        # Create a doc
+        doc = project / "docs" / "working" / "1001_test_spec.md"
+        doc.write_text("**Date:** 2026-01-15\n\n# Test Spec\n\nContent here.")
+
+        config = _make_config(project)
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            entries = build_queue(config, project)
+
+        doc_entries = [e for e in entries if e["type"] == "doc"]
+        assert len(doc_entries) >= 1
+        assert doc_entries[0]["path"] == "docs/working/1001_test_spec.md"
+        assert doc_entries[0]["pass"] == "initial"
+
+    def test_doc_frontmatter_date_used(self, project: Path) -> None:
+        doc = project / "docs" / "working" / "spec.md"
+        doc.write_text("**Date:** 2026-01-20\n\nContent.")
+
+        config = _make_config(project)
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            entries = build_queue(config, project)
+
+        doc_entries = [e for e in entries if e["type"] == "doc"]
+        assert doc_entries[0]["date"].startswith("2026-01-20")
+
+    def test_doc_revisit_entry(self, project: Path) -> None:
+        """Docs modified much later than created get a revisit entry."""
+        doc = project / "docs" / "working" / "evolving.md"
+        doc.write_text("**Date:** 2026-01-01\n\nContent.")
+
+        # Mock git: created Jan 1, modified Feb 15 (>7 days apart)
+        def mock_run(cmd, **kwargs):
+            if "--diff-filter=A" in cmd:
+                return type("R", (), {
+                    "stdout": "2026-01-01T00:00:00-06:00\nfile.md\n",
+                    "returncode": 0,
+                })()
+            elif "-1" in cmd:
+                return type("R", (), {
+                    "stdout": "2026-02-15T00:00:00-06:00\n",
+                    "returncode": 0,
+                })()
+            return type("R", (), {"stdout": "\n", "returncode": 0})()
+
+        config = _make_config(project)
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=mock_run):
+            entries = build_queue(config, project)
+
+        doc_entries = [e for e in entries if e["type"] == "doc"]
+        passes = [e["pass"] for e in doc_entries]
+        assert "initial" in passes
+        assert "revisit" in passes
+
+
+class TestBuildQueueIssues:
+    def test_includes_issue_entries(self, project: Path) -> None:
+        issue = {
+            "number": 42,
+            "title": "Bug report",
+            "body": "Something is wrong.",
+            "createdAt": "2026-01-10T12:00:00Z",
+            "state": "OPEN",
+            "labels": [],
+            "comments": [],
+        }
+        (project / "issues" / "42.json").write_text(json.dumps(issue))
+
+        config = _make_config(project)
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            entries = build_queue(config, project)
+
+        issue_entries = [e for e in entries if e["type"] == "issue"]
+        assert len(issue_entries) == 1
+        assert issue_entries[0]["issue_number"] == 42
+        assert issue_entries[0]["issue_title"] == "Bug report"
+        assert issue_entries[0]["date"] == "2026-01-10T12:00:00Z"
+
+
+class TestBuildQueueSessions:
+    def test_includes_session_entries(self, project: Path) -> None:
+        now_ms = int(time.time() * 1000)
+        history = project.parent / "history.jsonl"
+        with open(history, "w") as f:
+            f.write(json.dumps({
+                "sessionId": "s1",
+                "project": "/path/to/project",
+                "display": "Implement the authentication feature now",
+                "timestamp": now_ms,
+            }) + "\n")
+
+        config = _make_config(project, {
+            "sources": {
+                "sessions": {
+                    "path": str(history),
+                    "project_match": ["project"],
+                },
+            },
+        })
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            entries = build_queue(config, project)
+
+        session_entries = [e for e in entries if e["type"] == "prompts"]
+        assert len(session_entries) == 1
+        assert session_entries[0]["session_id"] == "s1"
+        assert session_entries[0]["prompt_count"] == 1
+
+    def test_session_files_written(self, project: Path) -> None:
+        now_ms = int(time.time() * 1000)
+        history = project.parent / "history.jsonl"
+        with open(history, "w") as f:
+            f.write(json.dumps({
+                "sessionId": "s-abc",
+                "project": "/dev/project",
+                "display": "A long enough prompt to pass filter checks",
+                "timestamp": now_ms,
+            }) + "\n")
+
+        config = _make_config(project, {
+            "sources": {
+                "sessions": {
+                    "path": str(history),
+                    "project_match": ["project"],
+                },
+            },
+        })
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            build_queue(config, project)
+
+        session_file = project / ".engram" / "sessions" / "s-abc.md"
+        assert session_file.exists()
+        content = session_file.read_text()
+        assert "long enough prompt" in content
+
+
+class TestBuildQueueSorting:
+    def test_entries_sorted_by_date(self, project: Path) -> None:
+        # Create issue dated Jan 1
+        issue = {
+            "number": 1, "title": "Early", "body": "First",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "state": "OPEN", "labels": [], "comments": [],
+        }
+        (project / "issues" / "1.json").write_text(json.dumps(issue))
+
+        # Create doc dated Feb 1
+        doc = project / "docs" / "working" / "later.md"
+        doc.write_text("**Date:** 2026-02-01\n\nLater content.")
+
+        config = _make_config(project)
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            entries = build_queue(config, project)
+
+        dates = [e["date"] for e in entries]
+        assert dates == sorted(dates)
+
+
+class TestBuildQueueOutput:
+    def test_writes_jsonl(self, project: Path) -> None:
+        issue = {
+            "number": 1, "title": "Test", "body": "Body",
+            "createdAt": "2026-01-15T00:00:00Z",
+            "state": "OPEN", "labels": [], "comments": [],
+        }
+        (project / "issues" / "1.json").write_text(json.dumps(issue))
+
+        config = _make_config(project)
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            build_queue(config, project)
+
+        queue_file = project / ".engram" / "queue.jsonl"
+        assert queue_file.exists()
+
+        with open(queue_file) as f:
+            lines = f.readlines()
+        assert len(lines) >= 1
+
+        # Each line is valid JSON
+        for line in lines:
+            parsed = json.loads(line)
+            assert "date" in parsed
+            assert "type" in parsed
+
+    def test_writes_sizes(self, project: Path) -> None:
+        issue = {
+            "number": 1, "title": "Test", "body": "Body",
+            "createdAt": "2026-01-15T00:00:00Z",
+            "state": "OPEN", "labels": [], "comments": [],
+        }
+        (project / "issues" / "1.json").write_text(json.dumps(issue))
+
+        config = _make_config(project)
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            build_queue(config, project)
+
+        sizes_file = project / ".engram" / "item_sizes.json"
+        assert sizes_file.exists()
+        sizes = json.loads(sizes_file.read_text())
+        assert isinstance(sizes, dict)
+        assert len(sizes) >= 1
+
+
+class TestBuildQueueEmpty:
+    def test_empty_project(self, project: Path) -> None:
+        config = _make_config(project)
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            entries = build_queue(config, project)
+
+        assert entries == []
