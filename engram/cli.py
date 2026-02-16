@@ -245,3 +245,45 @@ def lint(project_root: str) -> None:
                 loc += f"/{v.entry_id}"
             click.echo(f"  [{loc}] {v.message}")
         raise SystemExit(1)
+
+
+@cli.command()
+@click.option(
+    "--project-root",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    default=".",
+    help="Project root directory (default: cwd).",
+)
+@click.option(
+    "--fold-from",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    default=None,
+    help="Set fold continuation marker date (YYYY-MM-DD).",
+)
+def migrate(project_root: str, fold_from: object) -> None:
+    """Migrate v2 living docs to v3 format (one-time)."""
+    from engram.migrate import migrate as run_migrate
+
+    root = Path(project_root)
+    fold_date = fold_from.date() if fold_from else None  # type: ignore[union-attr]
+
+    click.echo("Starting v2 \u2192 v3 migration...")
+    lint_result, counters = run_migrate(root, fold_date)
+
+    click.echo(f"Counter state: C={counters['C']}, E={counters['E']}, W={counters['W']}")
+
+    if fold_date:
+        click.echo(f"Fold continuation marker set: {fold_date.isoformat()}")
+
+    if lint_result.passed:
+        click.echo("Validation: PASS (0 violations)")
+        click.echo("Migration complete.")
+    else:
+        click.echo(f"Validation: FAIL ({len(lint_result.violations)} violations)")
+        for v in lint_result.violations:
+            loc = v.doc_type
+            if v.entry_id:
+                loc += f"/{v.entry_id}"
+            click.echo(f"  [{loc}] {v.message}")
+        click.echo("Migration complete with validation warnings.")
+        raise SystemExit(1)
