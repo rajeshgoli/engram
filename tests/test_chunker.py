@@ -121,15 +121,27 @@ class TestDriftReportTriggered:
 
     def test_contested_review_triggered(self):
         report = DriftReport(
-            contested_claims=[{"name": "claim1", "days_old": 20}]
+            contested_claims=[{"name": f"claim{i}", "days_old": 20} for i in range(6)]
         )
-        assert report.triggered({}) == "contested_review"
+        assert report.triggered({"contested_review": 5}) == "contested_review"
+
+    def test_contested_review_at_threshold_not_triggered(self):
+        report = DriftReport(
+            contested_claims=[{"name": f"claim{i}", "days_old": 20} for i in range(5)]
+        )
+        assert report.triggered({"contested_review": 5}) is None
 
     def test_stale_unverified_triggered(self):
         report = DriftReport(
-            stale_unverified=[{"name": "claim1", "days_old": 35}]
+            stale_unverified=[{"name": f"claim{i}", "days_old": 35} for i in range(11)]
         )
-        assert report.triggered({}) == "stale_unverified"
+        assert report.triggered({"stale_unverified": 10}) == "stale_unverified"
+
+    def test_stale_unverified_at_threshold_not_triggered(self):
+        report = DriftReport(
+            stale_unverified=[{"name": f"claim{i}", "days_old": 35} for i in range(10)]
+        )
+        assert report.triggered({"stale_unverified": 10}) is None
 
     def test_workflow_synthesis_triggered(self):
         report = DriftReport(
@@ -140,16 +152,16 @@ class TestDriftReportTriggered:
     def test_priority_order_orphan_over_contested(self):
         report = DriftReport(
             orphaned_concepts=[{"name": f"c{i}"} for i in range(4)],
-            contested_claims=[{"name": "claim1"}],
+            contested_claims=[{"name": f"claim{i}"} for i in range(6)],
         )
-        assert report.triggered({"orphan_triage": 3}) == "orphan_triage"
+        assert report.triggered({"orphan_triage": 3, "contested_review": 5}) == "orphan_triage"
 
     def test_priority_order_contested_over_stale(self):
         report = DriftReport(
-            contested_claims=[{"name": "claim1"}],
-            stale_unverified=[{"name": "claim2"}],
+            contested_claims=[{"name": f"c{i}"} for i in range(6)],
+            stale_unverified=[{"name": f"s{i}"} for i in range(11)],
         )
-        assert report.triggered({}) == "contested_review"
+        assert report.triggered({"contested_review": 5, "stale_unverified": 10}) == "contested_review"
 
 
 # ------------------------------------------------------------------
@@ -368,6 +380,19 @@ class TestComputeBudget:
         paths = resolve_doc_paths(config, project)
         budget, _ = compute_budget(config, paths)
         assert budget <= config["budget"]["max_chunk_chars"]
+
+    def test_negative_budget_clamped_to_zero(self, project, config):
+        from engram.config import resolve_doc_paths
+        paths = resolve_doc_paths(config, project)
+
+        # Write living docs that exceed context_limit - overhead
+        # context_limit=600k, overhead=10k → docs > 590k should force negative
+        timeline = paths["timeline"]
+        timeline.write_text("x" * 600_000)
+
+        budget, living_chars = compute_budget(config, paths)
+        assert budget == 0
+        assert living_chars >= 600_000
 
 
 # ------------------------------------------------------------------
