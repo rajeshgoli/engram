@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from engram.bootstrap.fold import _filter_queue_by_date, forward_fold
+from engram.bootstrap.fold import forward_fold
 from engram.bootstrap.seed import (
     _collect_repo_snapshot,
     _ensure_living_docs,
@@ -250,50 +250,6 @@ class TestSeed:
 # ------------------------------------------------------------------
 
 
-class TestFilterQueueByDate:
-    def test_filters_entries(self, project: Path) -> None:
-        queue_file = project / ".engram" / "queue.jsonl"
-        entries = [
-            {"date": "2025-12-01T00:00:00Z", "type": "doc", "path": "a.md", "chars": 100},
-            {"date": "2026-01-15T00:00:00Z", "type": "doc", "path": "b.md", "chars": 200},
-            {"date": "2026-02-01T00:00:00Z", "type": "doc", "path": "c.md", "chars": 300},
-        ]
-        with open(queue_file, "w") as fh:
-            for e in entries:
-                fh.write(json.dumps(e) + "\n")
-
-        remaining = _filter_queue_by_date(project, date(2026, 1, 1))
-        assert remaining == 2
-
-        with open(queue_file) as fh:
-            filtered = [json.loads(line) for line in fh if line.strip()]
-        paths = [e["path"] for e in filtered]
-        assert "a.md" not in paths
-        assert "b.md" in paths
-        assert "c.md" in paths
-
-    def test_empty_queue(self, project: Path) -> None:
-        queue_file = project / ".engram" / "queue.jsonl"
-        queue_file.write_text("")
-        remaining = _filter_queue_by_date(project, date(2026, 1, 1))
-        assert remaining == 0
-
-    def test_all_filtered_out(self, project: Path) -> None:
-        queue_file = project / ".engram" / "queue.jsonl"
-        entries = [
-            {"date": "2024-01-01T00:00:00Z", "type": "doc", "path": "old.md", "chars": 100},
-        ]
-        with open(queue_file, "w") as fh:
-            for e in entries:
-                fh.write(json.dumps(e) + "\n")
-
-        remaining = _filter_queue_by_date(project, date(2026, 1, 1))
-        assert remaining == 0
-
-    def test_no_queue_file(self, project: Path) -> None:
-        remaining = _filter_queue_by_date(project, date(2026, 1, 1))
-        assert remaining == 0
-
 
 class TestForwardFold:
     @patch("engram.bootstrap.fold.next_chunk")
@@ -306,6 +262,9 @@ class TestForwardFold:
         result = forward_fold(project, date(2026, 1, 1))
         assert result is True
         mock_nc.assert_not_called()
+        # Verify start_date was passed
+        mock_bq.assert_called_once()
+        assert mock_bq.call_args[1]["start_date"] == "2026-01-01"
 
     @patch("engram.bootstrap.fold._dispatch_and_validate")
     @patch("engram.bootstrap.fold.next_chunk")
@@ -321,11 +280,6 @@ class TestForwardFold:
         mock_bq.return_value = [
             {"date": "2026-02-01T00:00:00Z", "type": "doc", "path": "x.md", "chars": 100},
         ]
-
-        # Write queue file so filter has something
-        queue_file = project / ".engram" / "queue.jsonl"
-        with open(queue_file, "w") as fh:
-            fh.write(json.dumps(mock_bq.return_value[0]) + "\n")
 
         chunk = MagicMock()
         chunk.chunk_id = 1
@@ -357,9 +311,6 @@ class TestForwardFold:
         mock_bq.return_value = [
             {"date": "2026-02-01T00:00:00Z", "type": "doc", "path": "x.md", "chars": 100},
         ]
-        queue_file = project / ".engram" / "queue.jsonl"
-        with open(queue_file, "w") as fh:
-            fh.write(json.dumps(mock_bq.return_value[0]) + "\n")
 
         chunk = MagicMock()
         chunk.chunk_id = 1

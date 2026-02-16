@@ -291,3 +291,158 @@ class TestBuildQueueEmpty:
             entries = build_queue(config, project)
 
         assert entries == []
+
+
+class TestBuildQueueStartDate:
+    def test_filters_entries_before_date(self, project: Path) -> None:
+        """Entries before start_date are excluded."""
+        # Create issues with different dates
+        for num, dt in [(1, "2025-12-01T00:00:00Z"), (2, "2026-01-15T00:00:00Z"),
+                        (3, "2026-02-01T00:00:00Z")]:
+            issue = {
+                "number": num, "title": f"Issue {num}", "body": "Body",
+                "createdAt": dt, "state": "OPEN", "labels": [], "comments": [],
+            }
+            (project / "issues" / f"{num}.json").write_text(json.dumps(issue))
+
+        config = _make_config(project)
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            entries = build_queue(config, project, start_date="2026-01-01")
+
+        assert len(entries) == 2
+        dates = [e["date"][:10] for e in entries]
+        assert "2025-12-01" not in dates
+        assert "2026-01-15" in dates
+        assert "2026-02-01" in dates
+
+    def test_none_start_date_returns_all(self, project: Path) -> None:
+        """start_date=None returns full queue (no filtering)."""
+        for num, dt in [(1, "2025-06-01T00:00:00Z"), (2, "2026-01-15T00:00:00Z")]:
+            issue = {
+                "number": num, "title": f"Issue {num}", "body": "Body",
+                "createdAt": dt, "state": "OPEN", "labels": [], "comments": [],
+            }
+            (project / "issues" / f"{num}.json").write_text(json.dumps(issue))
+
+        config = _make_config(project)
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            entries = build_queue(config, project, start_date=None)
+
+        assert len(entries) == 2
+
+    def test_all_filtered_out(self, project: Path) -> None:
+        """If all entries are before start_date, returns empty list."""
+        issue = {
+            "number": 1, "title": "Old", "body": "Body",
+            "createdAt": "2024-01-01T00:00:00Z",
+            "state": "OPEN", "labels": [], "comments": [],
+        }
+        (project / "issues" / "1.json").write_text(json.dumps(issue))
+
+        config = _make_config(project)
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            entries = build_queue(config, project, start_date="2026-01-01")
+
+        assert entries == []
+
+    def test_rejects_non_yyyy_mm_dd(self, project: Path) -> None:
+        """start_date with datetime ISO string raises ValueError."""
+        issue = {
+            "number": 1, "title": "Test", "body": "Body",
+            "createdAt": "2026-01-15T00:00:00Z",
+            "state": "OPEN", "labels": [], "comments": [],
+        }
+        (project / "issues" / "1.json").write_text(json.dumps(issue))
+
+        config = _make_config(project)
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            with pytest.raises(ValueError):
+                build_queue(config, project, start_date="2026-01-01T00:00:00")
+
+    def test_queue_jsonl_only_has_filtered_entries(self, project: Path) -> None:
+        """queue.jsonl output only contains post-cutoff entries."""
+        for num, dt in [(1, "2025-06-01T00:00:00Z"), (2, "2026-02-01T00:00:00Z")]:
+            issue = {
+                "number": num, "title": f"Issue {num}", "body": "Body",
+                "createdAt": dt, "state": "OPEN", "labels": [], "comments": [],
+            }
+            (project / "issues" / f"{num}.json").write_text(json.dumps(issue))
+
+        config = _make_config(project)
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            build_queue(config, project, start_date="2026-01-01")
+
+        queue_file = project / ".engram" / "queue.jsonl"
+        with open(queue_file) as f:
+            lines = [json.loads(line) for line in f if line.strip()]
+
+        assert len(lines) == 1
+        assert lines[0]["date"][:10] == "2026-02-01"
+
+    def test_item_sizes_unfiltered(self, project: Path) -> None:
+        """item_sizes.json includes ALL artifacts regardless of start_date."""
+        for num, dt in [(1, "2025-06-01T00:00:00Z"), (2, "2026-02-01T00:00:00Z")]:
+            issue = {
+                "number": num, "title": f"Issue {num}", "body": "Body",
+                "createdAt": dt, "state": "OPEN", "labels": [], "comments": [],
+            }
+            (project / "issues" / f"{num}.json").write_text(json.dumps(issue))
+
+        config = _make_config(project)
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            build_queue(config, project, start_date="2026-01-01")
+
+        sizes_file = project / ".engram" / "item_sizes.json"
+        sizes = json.loads(sizes_file.read_text())
+        # Both issues should appear in sizes even though one is filtered
+        assert len(sizes) == 2
+
+    def test_session_files_only_for_surviving_entries(self, project: Path) -> None:
+        """Session .md files are only written for entries that survive the filter."""
+        # Create two sessions: one old, one recent
+        history = project.parent / "history.jsonl"
+        old_ts = 1704067200000   # 2024-01-01T00:00:00Z (ms)
+        new_ts = 1738368000000   # 2025-02-01T00:00:00Z (ms)
+        with open(history, "w") as f:
+            f.write(json.dumps({
+                "sessionId": "old-session",
+                "project": "/path/to/project",
+                "display": "Old session content that should be filtered out",
+                "timestamp": old_ts,
+            }) + "\n")
+            f.write(json.dumps({
+                "sessionId": "new-session",
+                "project": "/path/to/project",
+                "display": "New session content that should survive the filter",
+                "timestamp": new_ts,
+            }) + "\n")
+
+        config = _make_config(project, {
+            "sources": {
+                "sessions": {
+                    "path": str(history),
+                    "project_match": ["project"],
+                },
+            },
+        })
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            entries = build_queue(config, project, start_date="2025-01-01")
+
+        sessions_dir = project / ".engram" / "sessions"
+        session_entries = [e for e in entries if e["type"] == "prompts"]
+
+        # The new session should survive; old should be filtered
+        session_ids = [e["session_id"] for e in session_entries]
+        assert "new-session" in session_ids
+        assert "old-session" not in session_ids
+
+        # Only surviving session file should exist
+        assert (sessions_dir / "new-session.md").exists()
+        assert not (sessions_dir / "old-session.md").exists()
