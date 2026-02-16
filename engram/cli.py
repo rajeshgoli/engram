@@ -185,12 +185,16 @@ def next_chunk_cmd(project_root: str) -> None:
     """Build the next chunk input and prompt files."""
     from engram.config import load_config
     from engram.fold.chunker import next_chunk
+    from engram.server.db import ServerDB
 
     root = Path(project_root)
     config = load_config(root)
 
+    db = ServerDB(root / ".engram" / "engram.db")
+    fold_from = db.get_fold_from()
+
     try:
-        result = next_chunk(config, root)
+        result = next_chunk(config, root, fold_from=fold_from)
     except FileNotFoundError as exc:
         click.echo(str(exc))
         raise SystemExit(1)

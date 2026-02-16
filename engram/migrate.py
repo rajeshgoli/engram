@@ -404,25 +404,13 @@ def initialize_counters(
 def set_fold_marker(db_path: Path, fold_from: date) -> None:
     """Set the fold continuation marker in SQLite.
 
-    Creates or updates the server_state table with the fold-from date.
+    Uses ServerDB to ensure the table always has the correct
+    singleton-row schema, handling legacy migration if needed.
     """
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS server_state (
-                key   TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            "INSERT OR REPLACE INTO server_state (key, value) VALUES (?, ?)",
-            ("fold_from", fold_from.isoformat()),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    from engram.server.db import ServerDB
+
+    db = ServerDB(db_path)
+    db.set_fold_from(fold_from.isoformat())
 
 
 # ------------------------------------------------------------------

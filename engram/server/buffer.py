@@ -76,7 +76,8 @@ class ContextBuffer:
         Reasons: ``"buffer_full"``, ``"drift:<type>"``.
         """
         # Check drift thresholds
-        drift = scan_drift(self._config, self._project_root)
+        fold_from = self._db.get_fold_from()
+        drift = scan_drift(self._config, self._project_root, fold_from=fold_from)
         thresholds = self._config.get("thresholds", {})
         drift_type = drift.triggered(thresholds)
         if drift_type:

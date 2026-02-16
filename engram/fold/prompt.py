@@ -72,8 +72,15 @@ def render_triage_input(
     drift_report: Any,
     chunk_id: int,
     doc_paths: dict[str, Path],
+    ref_commit: str | None = None,
+    ref_date: str | None = None,
 ) -> str:
-    """Render a drift-triage chunk's input.md file."""
+    """Render a drift-triage chunk's input.md file.
+
+    When *ref_commit* and *ref_date* are provided, the template
+    includes a temporal context block instructing the agent to check
+    file existence at the reference commit, not today's filesystem.
+    """
     env = _get_env()
     template = env.get_template("triage_prompt.md")
 
@@ -94,6 +101,8 @@ def render_triage_input(
         chunk_id=chunk_id,
         doc_paths=_stringify_paths(doc_paths),
         entry_count=len(entries),
+        ref_commit=ref_commit,
+        ref_date=ref_date,
     )
 
 
