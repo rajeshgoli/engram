@@ -114,7 +114,7 @@ engram/
 
 Set up the Python package:
 - `pyproject.toml` with click, pyyaml, watchdog, jinja2, filelock dependencies
-- `engram/config.py`: load `.engram/config.yaml`, validate required fields, provide defaults. Sessions config includes `format` (built-in: `claude-code`, `codex`), `path`, and `project_match` fields.
+- `engram/config.py`: load `.engram/config.yaml`, validate required fields, provide defaults. Sessions config includes `format` (built-in: `claude-code`; planned: `codex`), `path`, and `project_match` fields.
 - `engram/cli.py`: skeleton with `engram init` (creates `.engram/` dir + config template + empty living docs)
 - `engram/parse.py`: shared markdown parsing — `_parse_sections()` (port from v2 lines 583-614) and heading regex utilities. This is the foundation module used by both linter (#6) and compaction (#7).
 - Example config at `examples/config.yaml`
