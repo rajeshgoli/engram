@@ -62,6 +62,7 @@ engram/
 │   │   ├── __init__.py
 │   │   ├── watcher.py       # File/git event watching
 │   │   ├── buffer.py        # Context buffer accumulation + budget + drift detection
+│   │   ├── db.py            # SQLite state management (engram.db)
 │   │   └── dispatcher.py    # Dispatch to fold agent + validate result
 │   ├── fold/
 │   │   ├── __init__.py
@@ -141,13 +142,13 @@ Port the artifact ingestion pipeline:
 **Agent:** Engineer (single ticket)
 
 New code — no v2 equivalent:
-- `engram/fold/ids.py`: monotonic counter file (`id_counters.json`), atomic read/reserve/write
+- `engram/fold/ids.py`: monotonic counter backed by SQLite (`id_counters` table in `.engram/engram.db`). Atomic read/reserve/write via SQL transactions. Uses `server/db.py` from #9 for database access (or a shared `db.py` if #5 lands before #9 — interface is just `get_and_increment(category, count)`).
 - Pre-scan chunk items to estimate new entity count, reserve ID ranges
 - Include pre-assigned IDs in chunk metadata
 - Counter categories: C (concepts), E (epistemic), W (workflows)
 - IDs never reused, even after deletion
 
-**Acceptance:** Concurrent-safe ID allocation (file locking). IDs are disjoint across chunks by construction. `python -m pytest tests/test_ids.py` passes.
+**Acceptance:** Concurrent-safe ID allocation (SQLite transactions). IDs are disjoint across chunks by construction. `python -m pytest tests/test_ids.py` passes.
 
 ---
 
@@ -228,7 +229,8 @@ New code — three bootstrap paths (see engram_idea.md Bootstrap section):
 - `engram/bootstrap/seed.py`: read repo at a point-in-time snapshot, produce initial 4 living docs + 2 graveyard files via single agent dispatch. Uses `git worktree add` for historical snapshots (ephemeral, never touches user's working tree). Seed prompt template.
 - `engram/bootstrap/fold.py`: chronological fold from a start date to today — reuses queue builder (#4) + chunker (#8) with date filter.
 - CLI: `engram seed` (Path B: seed from today), `engram seed --from-date YYYY-MM-DD` (Path A: checkout snapshot at date, seed, fold forward to today)
-- Path C (adopt existing v2 docs) is handled by #11 migration + fold forward.
+- `engram fold --from YYYY-MM-DD` — standalone forward fold without re-seeding. Processes queue from a date to today against existing living docs. Used by Path C after migration, and by Path A internally after seeding.
+- Path C (adopt existing v2 docs) is handled by #11 migration + `engram fold --from`.
 
 **Dependencies:** #3 (config), #4 (queue), #8 (chunker)
 
@@ -246,7 +248,7 @@ New code — one-time migration tool for projects with pre-existing v2 living do
 - **Graveyard bootstrapping:** move existing DEAD/refuted entries to graveyard files, leave STUBs in living docs
 - **Cross-reference rewrite:** replace name-based references with stable ID references
 - **Counter initialization:** set `id_counters` in SQLite from max assigned IDs so subsequent allocations don't collide
-- **Fold continuation:** if `--fold-from` provided, set the marker so `engram run` knows where to start processing (e.g., `--fold-from 2026-01-01` for fractal where v2 stopped at Jan 1). Server or manual `engram seed --from-date` picks up from there.
+- **Fold continuation:** if `--fold-from` provided, set the marker date in SQLite (e.g., `--fold-from 2026-01-01` for fractal where v2 stopped at Jan 1). User then runs `engram fold --from 2026-01-01` (#10) to process the gap, or `engram run` picks up from the marker for future changes.
 - Validation pass: run linter (#6) after migration to confirm all entries and refs are valid
 
 **Dependencies:** #3 (config), #5 (IDs), #6 (linter)

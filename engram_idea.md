@@ -165,10 +165,10 @@ Cross-references use IDs: "see C042", "contradicts E007", "supersedes W003". The
 
 ### ID Allocation
 
-**The server is the single writer.** It owns a monotonic counter file (e.g., `local_data/id_counters.json`) with the next available ID per category:
+**The server is the single writer.** It owns a monotonic counter in the SQLite state database (`.engram/engram.db`, `id_counters` table) with the next available ID per category:
 
-```json
-{"C": 89, "E": 34, "W": 15}
+```
+id_counters: {C: 89, E: 34, W: 15}
 ```
 
 IDs are **pre-assigned in the chunk input**, not allocated by the fold agent. When the server builds a chunk, it scans the new items for entities that don't yet have IDs, reserves the next available IDs, and includes the assignments in the chunk instructions:
@@ -318,9 +318,9 @@ For projects with pre-existing living docs from the v2 fold (e.g., fractal-marke
    - Extract workflow entries from existing docs into the new 4th doc (workflow_registry.md)
    - Move existing DEAD/refuted entries to graveyard files, leave STUBs in living docs
    - Rewrite name-based cross-references to use stable IDs
-   - Initialize `id_counters.json` from max assigned IDs
+   - Initialize `id_counters` in SQLite from max assigned IDs
    - Set fold continuation marker (the date where v2 processing stopped)
-2. **Fold forward:** Process artifacts from the continuation date to today. Bridges the gap between where v2 stopped and now.
+2. **Fold forward:** `engram fold --from YYYY-MM-DD` — process artifacts from the continuation date to today using the standard chronological fold. Does not re-seed; operates on the migrated living docs. Bridges the gap between where v2 stopped and now.
 3. **Server starts.**
 
 Cost: migration is ~$0.50 (mostly mechanical). Fold-forward cost depends on the gap size.
@@ -350,7 +350,7 @@ The agent framework (Claude Code, Codex, etc.) handles file reading and editing.
 
 **Invocation:**
 ```bash
-claude "Read local_data/chunks/chunk_042_input.md and update the 4 living docs
+claude "Read .engram/chunks/chunk_042_input.md and update the 4 living docs
   and graveyard files based on the new content."
 ```
 
@@ -514,7 +514,7 @@ The knowledge server is project-agnostic. Standalone public repo.
 Each project has a config file pointing to its knowledge store:
 
 ```yaml
-# .knowledge/config.yaml (or similar)
+# .engram/config.yaml
 living_docs:
   timeline: docs/decisions/timeline.md
   concepts: docs/decisions/concept_registry.md
