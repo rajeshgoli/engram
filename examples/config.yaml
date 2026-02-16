@@ -1,0 +1,41 @@
+# Example engram config for a project.
+# Place at .engram/config.yaml in your project root.
+
+living_docs:
+  timeline: docs/decisions/timeline.md
+  concepts: docs/decisions/concept_registry.md
+  epistemic: docs/decisions/epistemic_state.md
+  workflows: docs/decisions/workflow_registry.md
+
+graveyard:
+  concepts: docs/decisions/concept_graveyard.md
+  epistemic: docs/decisions/epistemic_graveyard.md
+
+briefing:
+  file: CLAUDE.md
+  section: "## Project Knowledge Briefing"
+
+sources:
+  issues: local_data/issues/
+  docs:
+    - docs/working/
+    - docs/archive/
+    - docs/specs/
+  sessions:
+    format: claude-code           # Built-in: claude-code
+    path: ~/.claude/history.jsonl  # Default for claude-code format
+    project_match:                 # Filter sessions to this project
+      - my-project
+
+thresholds:
+  orphan_triage: 50
+  contested_review_days: 14
+  stale_unverified_days: 30
+  workflow_repetition: 3
+
+budget:
+  context_limit_chars: 600000
+  instructions_overhead: 10000
+  max_chunk_chars: 200000
+
+model: sonnet
