@@ -135,7 +135,7 @@ def parse_frontmatter_date(
             date_str = match.group(1)
             if project_start and date_str < project_start:
                 return None
-            return date_str + "T00:00:00-08:00"
+            return date_str + "T00:00:00+00:00"
     except Exception:
         pass
     return None

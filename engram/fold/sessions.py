@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -107,7 +107,7 @@ class ClaudeCodeAdapter(SessionAdapter):
 
             rendered = _render_session_markdown(prompts)
             session_date = datetime.fromtimestamp(
-                prompts[0]["timestamp"] / 1000
+                prompts[0]["timestamp"] / 1000, tz=timezone.utc
             ).isoformat()
 
             entries.append(SessionEntry(
@@ -158,7 +158,7 @@ def _render_session_markdown(prompts: list[dict[str, Any]]) -> str:
     """Render a list of prompts from one session as markdown."""
     lines = []
     for p in prompts:
-        ts = datetime.fromtimestamp(p["timestamp"] / 1000)
+        ts = datetime.fromtimestamp(p["timestamp"] / 1000, tz=timezone.utc)
         text = p["display"]
         lines.append(f"**[{ts.strftime('%H:%M')}]** {text}")
         lines.append("")

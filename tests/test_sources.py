@@ -78,7 +78,7 @@ class TestParseFrontmatterDate:
         doc = tmp_path / "test.md"
         doc.write_text("# Title\n\n**Date:** 2026-02-08\n\nContent here.")
         result = parse_frontmatter_date(doc)
-        assert result == "2026-02-08T00:00:00-08:00"
+        assert result == "2026-02-08T00:00:00+00:00"
 
     def test_no_date(self, tmp_path: Path) -> None:
         doc = tmp_path / "test.md"
@@ -94,13 +94,13 @@ class TestParseFrontmatterDate:
         doc = tmp_path / "test.md"
         doc.write_text("**Date:** 2026-01-15\n")
         result = parse_frontmatter_date(doc, project_start="2025-12-10")
-        assert result == "2026-01-15T00:00:00-08:00"
+        assert result == "2026-01-15T00:00:00+00:00"
 
     def test_no_project_start_filter(self, tmp_path: Path) -> None:
         doc = tmp_path / "test.md"
         doc.write_text("**Date:** 2020-01-01\n")
         result = parse_frontmatter_date(doc)
-        assert result == "2020-01-01T00:00:00-08:00"
+        assert result == "2020-01-01T00:00:00+00:00"
 
     def test_nonexistent_file(self, tmp_path: Path) -> None:
         doc = tmp_path / "nonexistent.md"

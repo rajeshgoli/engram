@@ -7,9 +7,13 @@ Outputs JSONL with entries for docs, issues, and session prompts.
 from __future__ import annotations
 
 import json
+import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from engram.fold.sessions import get_adapter
 from engram.fold.sources import (
@@ -59,8 +63,8 @@ def build_queue(
             try:
                 issue = json.loads(f.read_text())
                 issue_dates[issue["number"]] = issue["createdAt"]
-            except Exception:
-                pass
+            except (json.JSONDecodeError, KeyError) as exc:
+                logger.warning("Skipping issue date from %s: %s", f.name, exc)
 
     entries: list[dict[str, Any]] = []
     sizes: dict[str, int] = {}
@@ -88,8 +92,7 @@ def build_queue(
 
             if not created:
                 mtime = os.path.getmtime(doc_path)
-                from datetime import datetime
-                created = datetime.fromtimestamp(mtime).isoformat()
+                created = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
 
             # Resolve modified date
             _, git_modified = get_doc_git_dates(doc_path, project_root)
@@ -138,8 +141,8 @@ def build_queue(
                     "issue_number": issue["number"],
                     "issue_title": issue.get("title", ""),
                 })
-            except Exception:
-                pass
+            except (json.JSONDecodeError, KeyError) as exc:
+                logger.warning("Skipping issue %s: %s", f.name, exc)
 
     # --- Process session prompts ---
     fmt = session_cfg.get("format", "claude-code")
