@@ -21,6 +21,29 @@ Agents start fresh every session with no way to:
 
 Currently, the project owner re-explains context every session. Knowledge evaporates when sessions end.
 
+### "Isn't code self-documenting?"
+
+Code tells you *what exists now*. It cannot tell you:
+
+- **What used to exist.** A deleted class leaves no trace in the current tree. But agents will find references to it in docs, issues, and CLAUDE.md — and assume it's alive. Code is self-documenting about the present, silent about the past.
+- **Why it exists.** The code shows `signal_gate.py` and `signal_resolver.py` are separate files. It doesn't show that this separation was accepted for expediency during a deadline, that the architect flagged it as probable duplication, and that merging them is deferred debt. The rationale lives in PR comments, issue discussions, and user prompts — not in the code.
+- **Whether its outputs are trusted.** A backtest function can return 74% win rate. The code is correct — it runs and produces that number. But the number is wrong because of a same-bar resolution bug discovered three issues later. Code cannot tell you its own results have been refuted.
+- **How to work with it.** Investigation methodology, review protocols, debugging patterns — these evolved through trial and error across dozens of sessions. The code has no opinion on process.
+
+Self-documenting code is a statement about readability, not about knowledge. A well-named function tells you what it does. It doesn't tell you that three other functions tried the same thing and failed, that the approach was contested, or that the metric it optimizes for has been debunked.
+
+### "Why not a vector database / RAG?"
+
+RAG answers "find me documents about X." This system answers "what do we know, what's dead, and what contradicts what."
+
+The gap is structural:
+- **RAG finds similarity, not contradiction.** Two documents claiming contradictory win rates both match a query about win rates. RAG returns both with equal confidence. Engram marks one as refuted and tells the agent which to trust.
+- **RAG doesn't know what's dead.** A deleted concept still lives in archived docs. RAG retrieves those docs. Engram marks the concept DEAD and points to what replaced it.
+- **RAG retrieves chunks, not synthesized knowledge.** An agent gets 10 document fragments and must synthesize understanding on the fly, every session. Engram pre-synthesizes once and serves the result.
+- **RAG has no ontology.** It can't distinguish a code concept from an epistemic claim from a workflow pattern. Everything is a "document." Engram enforces category boundaries that prevent agents from building features on refuted claims.
+
+At scale (2,000+ docs), RAG as an L2 fallback — retrieving raw artifacts when living docs point to them — may become useful. But it doesn't replace the synthesis layer.
+
 ---
 
 ## Solution Overview
@@ -630,9 +653,7 @@ Preserved for context. The v2 fold processed 17 chunks (Oct–Jan 1) using a man
 
 ## Design Rationale
 
-### Why not RAG?
-
-RAG answers "find me documents about X." This system answers "what do we know, what's dead, and what contradicts what." RAG finds similarity, not contradiction. It doesn't capture relationships, doesn't know what's dead, and retrieves chunks rather than pre-synthesized knowledge. At scale (2,000+ docs), RAG as an L2 fallback may become useful. Not there yet.
+(See Problem section for "Isn't code self-documenting?" and "Why not RAG?" — both address why this system needs to exist.)
 
 ### Why a server, not a script?
 
