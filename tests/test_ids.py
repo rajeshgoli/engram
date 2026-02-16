@@ -25,9 +25,8 @@ def db_path(tmp_path: Path) -> Path:
 @pytest.fixture
 def allocator(db_path: Path) -> IDAllocator:
     """Return a fresh IDAllocator."""
-    alloc = IDAllocator(db_path)
-    yield alloc
-    alloc.close()
+    with IDAllocator(db_path) as alloc:
+        yield alloc
 
 
 # ------------------------------------------------------------------
@@ -308,6 +307,24 @@ class TestDatabaseInit:
         alloc2 = IDAllocator(db_path)
         assert alloc2.peek("C") == 11
         alloc2.close()
+
+
+# ------------------------------------------------------------------
+# Context manager
+# ------------------------------------------------------------------
+
+class TestContextManager:
+    def test_with_statement(self, db_path: Path) -> None:
+        with IDAllocator(db_path) as alloc:
+            assert alloc.next_id("C") == "C001"
+        # After exit, allocator still works for peek (per-call connections)
+        alloc2 = IDAllocator(db_path)
+        assert alloc2.peek("C") == 2
+
+    def test_close_is_idempotent(self, db_path: Path) -> None:
+        alloc = IDAllocator(db_path)
+        alloc.close()
+        alloc.close()  # Should not raise
 
 
 # ------------------------------------------------------------------

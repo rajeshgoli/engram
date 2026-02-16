@@ -28,6 +28,11 @@ class IDAllocator:
     Each category (C, E, W) has an independent counter that only moves
     forward. IDs are never reused, even after deletion.
 
+    Supports context manager protocol::
+
+        with IDAllocator(db_path) as alloc:
+            alloc.next_id("C")
+
     Parameters
     ----------
     db_path:
@@ -38,9 +43,13 @@ class IDAllocator:
     def __init__(self, db_path: Path) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._db_path))
-        self._conn.execute("PRAGMA journal_mode=WAL")
         self._init_table()
+
+    def _connect(self) -> sqlite3.Connection:
+        """Create a new connection with WAL mode enabled."""
+        conn = sqlite3.connect(str(self._db_path))
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
 
     def _init_table(self) -> None:
         """Create the id_counters table if it doesn't exist.
@@ -48,21 +57,34 @@ class IDAllocator:
         Each row stores the *next available* ID for a category.
         Counters start at 1 (first assigned ID will be 1).
         """
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS id_counters (
-                category TEXT PRIMARY KEY,
-                next_id  INTEGER NOT NULL DEFAULT 1
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS id_counters (
+                    category TEXT PRIMARY KEY,
+                    next_id  INTEGER NOT NULL DEFAULT 1
+                )
+                """
             )
-            """
-        )
-        # Seed all categories if missing
-        for cat in CATEGORIES:
-            self._conn.execute(
-                "INSERT OR IGNORE INTO id_counters (category, next_id) VALUES (?, 1)",
-                (cat,),
-            )
-        self._conn.commit()
+            for cat in CATEGORIES:
+                conn.execute(
+                    "INSERT OR IGNORE INTO id_counters (category, next_id) VALUES (?, 1)",
+                    (cat,),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------
+    # Context manager
+    # ------------------------------------------------------------------
+
+    def __enter__(self) -> IDAllocator:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     # ------------------------------------------------------------------
     # Core allocation
@@ -90,30 +112,12 @@ class IDAllocator:
 
         prefix = CATEGORIES[category]
 
-        # Use a dedicated connection per call for true concurrency safety.
-        # ``BEGIN IMMEDIATE`` acquires a write lock up front so concurrent
+        # BEGIN IMMEDIATE acquires a write lock up front so concurrent
         # callers serialize at the SQLite level.
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT next_id FROM id_counters WHERE category = ?",
-                (category,),
-            ).fetchone()
-            if row is None:
-                # Should not happen after _init_table, but be defensive
-                conn.execute(
-                    "INSERT INTO id_counters (category, next_id) VALUES (?, ?)",
-                    (category, 1),
-                )
-                start = 1
-            else:
-                start = row[0]
-            new_next = start + count
-            conn.execute(
-                "UPDATE id_counters SET next_id = ? WHERE category = ?",
-                (new_next, category),
-            )
+            start = _reserve_on_conn(conn, category, count)
             conn.commit()
         except Exception:
             conn.rollback()
@@ -130,7 +134,7 @@ class IDAllocator:
     def peek(self, category: str) -> int:
         """Return the next available ID number for *category* without advancing."""
         _validate_category(category)
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._connect()
         try:
             row = conn.execute(
                 "SELECT next_id FROM id_counters WHERE category = ?",
@@ -142,7 +146,7 @@ class IDAllocator:
 
     def peek_all(self) -> dict[str, int]:
         """Return ``{category: next_id}`` for all categories."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._connect()
         try:
             rows = conn.execute("SELECT category, next_id FROM id_counters").fetchall()
             return {cat: nid for cat, nid in rows}
@@ -159,7 +163,10 @@ class IDAllocator:
         new_epistemic: int = 0,
         new_workflows: int = 0,
     ) -> dict[str, list[str]]:
-        """Reserve ID ranges for a chunk and return pre-assigned IDs.
+        """Atomically reserve ID ranges across all categories for a chunk.
+
+        All category counters are updated in a single transaction — a crash
+        cannot leave counters partially advanced for a chunk.
 
         This is the main entry point used by the chunker before dispatch.
 
@@ -169,15 +176,37 @@ class IDAllocator:
             ``{"C": ["C042", ...], "E": ["E034", ...], "W": ["W015", ...]}``
             Only categories with count > 0 are included.
         """
-        result: dict[str, list[str]] = {}
-        for cat, count in [("C", new_concepts), ("E", new_epistemic), ("W", new_workflows)]:
-            if count > 0:
-                result[cat] = self.reserve_range(cat, count)
-        return result
+        requests = [
+            ("C", new_concepts),
+            ("E", new_epistemic),
+            ("W", new_workflows),
+        ]
+        # Skip if nothing to reserve
+        if all(count <= 0 for _, count in requests):
+            return {}
+
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            ranges: dict[str, tuple[str, int, int]] = {}  # cat -> (prefix, start, count)
+            for cat, count in requests:
+                if count > 0:
+                    start = _reserve_on_conn(conn, cat, count)
+                    ranges[cat] = (CATEGORIES[cat], start, count)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+        return {
+            cat: [f"{prefix}{i:03d}" for i in range(start, start + count)]
+            for cat, (prefix, start, count) in ranges.items()
+        }
 
     def close(self) -> None:
-        """Close the internal connection (init-time connection only)."""
-        self._conn.close()
+        """No-op for API compatibility. All connections are per-call."""
 
 
 # ------------------------------------------------------------------
@@ -192,10 +221,35 @@ def _validate_category(category: str) -> None:
         )
 
 
+def _reserve_on_conn(conn: sqlite3.Connection, category: str, count: int) -> int:
+    """Reserve *count* IDs for *category* using an existing connection.
+
+    The caller must manage the transaction (BEGIN/COMMIT/ROLLBACK).
+    Returns the starting ID number.
+    """
+    row = conn.execute(
+        "SELECT next_id FROM id_counters WHERE category = ?",
+        (category,),
+    ).fetchone()
+    if row is None:
+        conn.execute(
+            "INSERT INTO id_counters (category, next_id) VALUES (?, ?)",
+            (category, 1),
+        )
+        start = 1
+    else:
+        start = row[0]
+    conn.execute(
+        "UPDATE id_counters SET next_id = ? WHERE category = ?",
+        (start + count, category),
+    )
+    return start
+
+
 def estimate_new_entities(items: Sequence[dict]) -> dict[str, int]:
     """Estimate how many new entities a chunk's items will produce.
 
-    Scans chunk items for ``entity_type`` hints. Items without a hint
+    Scans chunk items for ``entity_hints``. Items without hints
     are ignored (they update existing entries rather than creating new ones).
 
     Parameters
