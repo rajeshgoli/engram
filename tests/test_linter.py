@@ -358,14 +358,34 @@ class TestCrossReferences:
 # ======================================================================
 
 class TestDuplicateIds:
-    def test_no_duplicates(self) -> None:
+    def test_stub_graveyard_pair_not_duplicate(self) -> None:
+        """A STUB in living doc + full entry in graveyard is expected, not a dup."""
         contents = {
             "concepts": VALID_CONCEPTS,
             "concept_graveyard": VALID_CONCEPT_GRAVEYARD,
         }
         violations = validate_no_duplicate_ids(contents)
-        # C003 appears in both living (stub) and graveyard (full) — that's a dup
-        assert any("C003" in v.message for v in violations)
+        # C003 is a stub in living + full in graveyard — should NOT be flagged
+        assert not any("C003" in v.message for v in violations)
+
+    def test_epistemic_stub_graveyard_pair_not_duplicate(self) -> None:
+        """Same for epistemic: refuted stub + graveyard entry is valid."""
+        contents = {
+            "epistemic": VALID_EPISTEMIC,
+            "epistemic_graveyard": VALID_EPISTEMIC_GRAVEYARD,
+        }
+        violations = validate_no_duplicate_ids(contents)
+        assert not any("E003" in v.message for v in violations)
+
+    def test_non_stub_duplicate_with_graveyard_flagged(self) -> None:
+        """An ACTIVE entry in living doc + entry in graveyard IS a duplicate."""
+        contents = {
+            "concepts": "## C001: thing (ACTIVE)\n- **Code:** `f.py`\n",
+            "concept_graveyard": "## C001: thing (DEAD)\n- **Died:** yesterday\n",
+        }
+        violations = validate_no_duplicate_ids(contents)
+        assert len(violations) == 1
+        assert "C001" in violations[0].message
 
     def test_duplicate_within_doc(self) -> None:
         doc = """\
@@ -458,26 +478,60 @@ class TestMissingSections:
 
 class TestIdCompliance:
     def test_all_pre_assigned_present(self) -> None:
+        before: dict[str, str] = {"concepts": "", "epistemic": ""}
         after = {
             "concepts": "## C010: new_thing (ACTIVE)\n- **Code:** `f.py`\n",
             "epistemic": "## E005: new_claim (believed)\n**Evidence:** data\n",
         }
-        assert check_id_compliance(after, ["C010", "E005"]) == []
+        assert check_id_compliance(after, ["C010", "E005"], before) == []
 
     def test_missing_pre_assigned_id(self) -> None:
+        before: dict[str, str] = {"concepts": ""}
         after = {
             "concepts": "## C010: new_thing (ACTIVE)\n- **Code:** `f.py`\n",
         }
-        violations = check_id_compliance(after, ["C010", "E005"])
+        violations = check_id_compliance(after, ["C010", "E005"], before)
         assert len(violations) == 1
         assert "E005" in violations[0].message
+        assert "not found in output" in violations[0].message
+
+    def test_agent_invented_id_flagged(self) -> None:
+        """IDs in output that weren't pre-assigned and didn't exist before."""
+        before: dict[str, str] = {"concepts": ""}
+        after = {
+            "concepts": (
+                "## C010: assigned (ACTIVE)\n- **Code:** `f.py`\n\n"
+                "## C099: invented (ACTIVE)\n- **Code:** `g.py`\n"
+            ),
+        }
+        violations = check_id_compliance(after, ["C010"], before)
+        assert len(violations) == 1
+        assert "C099" in violations[0].message
+        assert "Agent-invented" in violations[0].message
+
+    def test_pre_existing_id_not_flagged_as_invented(self) -> None:
+        """IDs that existed before dispatch are not agent-invented."""
+        before = {
+            "concepts": "## C001: old (ACTIVE)\n- **Code:** `old.py`\n",
+        }
+        after = {
+            "concepts": (
+                "## C001: old (ACTIVE)\n- **Code:** `old.py`\n\n"
+                "## C010: new (ACTIVE)\n- **Code:** `new.py`\n"
+            ),
+        }
+        violations = check_id_compliance(after, ["C010"], before)
+        assert violations == []
 
     def test_empty_pre_assigned_skipped(self) -> None:
         assert check_id_compliance({"concepts": ""}, []) == []
 
-    def test_none_pre_assigned_skipped(self) -> None:
-        # The main lint function handles None → skip
-        assert check_id_compliance({"concepts": ""}, []) == []
+    def test_no_before_contents_still_checks_missing(self) -> None:
+        """Without before_contents, invented IDs can't be detected but missing still works."""
+        after = {"concepts": ""}
+        violations = check_id_compliance(after, ["C010"])
+        assert len(violations) == 1
+        assert "C010" in violations[0].message
 
 
 # ======================================================================
@@ -497,9 +551,7 @@ class TestLintIntegration:
             "epistemic_graveyard": VALID_EPISTEMIC_GRAVEYARD,
         }
         result = lint(living_docs, graveyard)
-        # C003 appears in both living (stub) and graveyard — expected dup
-        non_dup_violations = [v for v in result.violations if "Duplicate" not in v.message]
-        assert non_dup_violations == [], f"Unexpected: {non_dup_violations}"
+        assert result.passed, f"Unexpected violations: {result.violations}"
 
     def test_missing_code_field_fails(self) -> None:
         living_docs = {
@@ -617,6 +669,26 @@ class TestLintPostDispatch:
         )
         assert not result.passed
         assert any("E005" in v.message for v in result.violations)
+
+    def test_agent_invented_id_in_post_dispatch(self) -> None:
+        """Agent invents C099 which wasn't pre-assigned or pre-existing."""
+        before = {"concepts": "", "epistemic": "", "workflows": "", "timeline": ""}
+        after = {
+            "concepts": (
+                "## C010: assigned (ACTIVE)\n- **Code:** `f.py`\n\n"
+                "## C099: rogue (ACTIVE)\n- **Code:** `g.py`\n"
+            ),
+            "epistemic": "",
+            "workflows": "",
+            "timeline": "",
+        }
+        result = lint_post_dispatch(
+            before, after,
+            pre_assigned_ids=["C010"],
+        )
+        assert not result.passed
+        assert any("C099" in v.message and "Agent-invented" in v.message
+                    for v in result.violations)
 
 
 # ======================================================================

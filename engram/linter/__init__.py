@@ -121,7 +121,9 @@ def lint_post_dispatch(
     violations.extend(check_missing_sections(before_contents, after_contents))
 
     if pre_assigned_ids:
-        violations.extend(check_id_compliance(after_contents, pre_assigned_ids))
+        violations.extend(check_id_compliance(
+            after_contents, pre_assigned_ids, before_contents,
+        ))
 
     return LintResult(passed=len(violations) == 0, violations=violations)
 

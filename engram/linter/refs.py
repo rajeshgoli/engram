@@ -6,14 +6,26 @@ and that no duplicate IDs exist within a doc type.
 
 from __future__ import annotations
 
-from engram.parse import extract_id, extract_referenced_ids, parse_sections
+from engram.parse import extract_id, extract_referenced_ids, is_stub, parse_sections
 from engram.linter.schema import Violation
+
+# Expected stub+graveyard pairings: living doc → graveyard doc
+_GRAVEYARD_PAIRS: dict[str, str] = {
+    "concepts": "concept_graveyard",
+    "epistemic": "epistemic_graveyard",
+}
+# Reverse: graveyard → living doc
+_GRAVEYARD_TO_LIVING = {v: k for k, v in _GRAVEYARD_PAIRS.items()}
 
 
 def validate_no_duplicate_ids(
     contents: dict[str, str],
 ) -> list[Violation]:
-    """Check that no ID appears more than once across its home doc + graveyard.
+    """Check that no ID appears more than once, except stub+graveyard pairs.
+
+    A DEAD/EVOLVED/refuted entry properly has a STUB in the living doc
+    and a full entry in the graveyard. That pairing is expected and is
+    NOT flagged as a duplicate.
 
     Parameters
     ----------
@@ -45,6 +57,16 @@ def validate_no_duplicate_ids(
     if "epistemic_graveyard" in contents:
         registry_groups["E"].append(("epistemic_graveyard", contents["epistemic_graveyard"]))
 
+    # Build a set of stub IDs per living doc for stub+graveyard pairing
+    stub_ids: dict[str, set[str]] = {}  # doc_type → {ids that are stubs}
+    for living_doc in _GRAVEYARD_PAIRS:
+        if living_doc in contents:
+            stub_ids[living_doc] = {
+                extract_id(s["heading"])
+                for s in parse_sections(contents[living_doc])
+                if extract_id(s["heading"]) and is_stub(s["heading"])
+            }
+
     for prefix, doc_pairs in registry_groups.items():
         seen: dict[str, str] = {}  # id → first doc_type
         for doc_type, content in doc_pairs:
@@ -52,15 +74,37 @@ def validate_no_duplicate_ids(
                 entry_id = extract_id(section["heading"])
                 if entry_id and entry_id.startswith(prefix):
                     if entry_id in seen:
+                        # Allow stub+graveyard pair
+                        first_doc = seen[entry_id]
+                        if _is_stub_graveyard_pair(
+                            first_doc, doc_type, entry_id, stub_ids
+                        ):
+                            continue
                         violations.append(Violation(
                             doc_type, entry_id,
                             f"Duplicate ID '{entry_id}' — "
-                            f"also in {seen[entry_id]}",
+                            f"also in {first_doc}",
                         ))
                     else:
                         seen[entry_id] = doc_type
 
     return violations
+
+
+def _is_stub_graveyard_pair(
+    doc_a: str,
+    doc_b: str,
+    entry_id: str,
+    stub_ids: dict[str, set[str]],
+) -> bool:
+    """Return True if doc_a/doc_b are a living-stub + graveyard pair for entry_id."""
+    # Check: doc_a is living, doc_b is its graveyard (or vice versa)
+    for living_doc, graveyard_doc in _GRAVEYARD_PAIRS.items():
+        if doc_a == living_doc and doc_b == graveyard_doc:
+            return entry_id in stub_ids.get(living_doc, set())
+        if doc_a == graveyard_doc and doc_b == living_doc:
+            return entry_id in stub_ids.get(living_doc, set())
+    return False
 
 
 def validate_cross_references(

@@ -81,8 +81,14 @@ def check_missing_sections(
 def check_id_compliance(
     after_contents: dict[str, str],
     pre_assigned_ids: list[str],
+    before_contents: dict[str, str] | None = None,
 ) -> list[Violation]:
-    """Verify that pre-assigned IDs appear in the output and no extras were invented.
+    """Verify pre-assigned IDs appear in output and no extras were invented.
+
+    Checks both directions:
+    1. Every pre-assigned ID must appear as a heading in the output.
+    2. Every NEW ID in the output (not present before dispatch) must be
+       in the pre-assigned set. Agent-invented IDs are violations.
 
     Parameters
     ----------
@@ -90,31 +96,51 @@ def check_id_compliance(
         Living doc contents after dispatch.
     pre_assigned_ids:
         IDs that were pre-assigned in the chunk input.
+    before_contents:
+        Living doc contents before dispatch. Used to distinguish
+        pre-existing IDs from newly created ones.
     """
     if not pre_assigned_ids:
         return []
 
     violations: list[Violation] = []
 
-    # Collect all IDs that appear as headings in the output
-    all_output_ids: set[str] = set()
-    before_ids: set[str] = set()  # not available here — compare against pre_assigned
-
+    # Collect all IDs in the output
+    all_after_ids: set[str] = set()
     for content in after_contents.values():
         for section in parse_sections(content):
             entry_id = extract_id(section["heading"])
             if entry_id:
-                all_output_ids.add(entry_id)
+                all_after_ids.add(entry_id)
+
+    # Collect all IDs that existed before dispatch
+    all_before_ids: set[str] = set()
+    if before_contents:
+        for content in before_contents.values():
+            for section in parse_sections(content):
+                entry_id = extract_id(section["heading"])
+                if entry_id:
+                    all_before_ids.add(entry_id)
 
     pre_assigned_set = set(pre_assigned_ids)
 
-    # Check: pre-assigned IDs should appear in the output
-    missing = pre_assigned_set - all_output_ids
+    # Check 1: pre-assigned IDs should appear in the output
+    missing = pre_assigned_set - all_after_ids
     for entry_id in sorted(missing):
         violations.append(Violation(
             "guard", entry_id,
             f"Pre-assigned ID '{entry_id}' not found in output. "
             f"Fold agent did not create the expected entry.",
+        ))
+
+    # Check 2: new IDs in output must be in the pre-assigned set
+    new_ids = all_after_ids - all_before_ids
+    invented = new_ids - pre_assigned_set
+    for entry_id in sorted(invented):
+        violations.append(Violation(
+            "guard", entry_id,
+            f"Agent-invented ID '{entry_id}' not in pre-assigned set. "
+            f"Fold agents must use pre-assigned IDs, not invent their own.",
         ))
 
     return violations
