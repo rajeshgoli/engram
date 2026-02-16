@@ -20,7 +20,6 @@ from engram.config import resolve_doc_paths
 from engram.dispatch import invoke_agent, read_docs
 from engram.fold.chunker import ChunkResult, next_chunk
 from engram.linter import LintResult, lint_post_dispatch
-from engram.server.briefing import _inject_section  # re-export for backward compat
 
 log = logging.getLogger(__name__)
 
@@ -294,8 +293,3 @@ def _build_correction_text(chunk: ChunkResult, result: LintResult) -> str:
         f"Please fix these violations in the living docs. "
         f"Re-read the input file at {chunk.input_path.resolve()} for context.\n"
     )
-
-
-
-# _inject_section is imported from engram.server.briefing (see top-level import)
-# and re-exported here for backward compatibility with existing tests.

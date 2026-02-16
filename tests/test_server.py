@@ -625,7 +625,7 @@ class TestDispatcherHelpers:
         assert "# Concept Registry" in contents["concepts"]
 
     def test_inject_section_new(self, tmp_path: Path) -> None:
-        from engram.server.dispatcher import _inject_section
+        from engram.server.briefing import _inject_section
 
         f = tmp_path / "test.md"
         f.write_text("# Existing\nContent here.\n")
@@ -637,7 +637,7 @@ class TestDispatcherHelpers:
         assert "# Existing" in text
 
     def test_inject_section_replace(self, tmp_path: Path) -> None:
-        from engram.server.dispatcher import _inject_section
+        from engram.server.briefing import _inject_section
 
         f = tmp_path / "test.md"
         f.write_text(

@@ -516,7 +516,7 @@ class ServerDB:
         Recovery strategy per state:
         - building: discard (rebuild from buffer)
         - dispatched: needs re-check or re-dispatch (returned to caller)
-        - validated: L0 regen incomplete (returned to caller)
+        - validated: mark L0 stale + committed (deferred to queue drain)
 
         Returns list of dispatch records needing attention.
         """
