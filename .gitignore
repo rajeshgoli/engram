@@ -1,1 +1,8 @@
 .claude/workspace.lock
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+venv/
+.pytest_cache/
