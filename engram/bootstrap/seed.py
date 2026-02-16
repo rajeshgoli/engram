@@ -22,12 +22,15 @@ from typing import Any
 
 from engram.cli import GRAVEYARD_HEADERS, LIVING_DOC_HEADERS
 from engram.config import load_config, resolve_doc_paths
+from engram.dispatch import invoke_agent
 from engram.fold.ids import IDAllocator
 from engram.fold.prompt import render_seed_prompt
 
 log = logging.getLogger(__name__)
 
-# How many IDs to pre-assign for the seed round
+# How many IDs to pre-assign for the seed round.
+# Sized for a medium repo (~30 concepts, ~20 epistemic claims, ~10 workflows).
+# IDs are never reused, so over-allocating wastes range but is harmless.
 _SEED_ID_BUDGET = {"C": 30, "E": 20, "W": 10}
 
 
@@ -245,35 +248,11 @@ def _dispatch_seed_agent(
     prompt_path = engram_dir / "seed_prompt.txt"
     prompt_path.write_text(prompt)
 
-    # Invoke fold agent
-    model = config.get("model", "sonnet")
-    agent_cmd = config.get("agent_command")
-    if agent_cmd:
-        cmd = agent_cmd.split()
-    else:
-        cmd = ["claude", "--print", "--model", model]
-    cmd.append(prompt)
-
     log.info("Dispatching seed agent...")
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            cwd=str(project_root),
-            timeout=600,
-        )
-        if result.returncode != 0:
-            log.error("Seed agent failed (rc=%d): %s", result.returncode, result.stderr[:500])
-            return False
+    ok = invoke_agent(config, project_root, prompt)
+    if ok:
         log.info("Seed agent completed successfully")
-        return True
-    except subprocess.TimeoutExpired:
-        log.error("Seed agent timed out (10 min)")
-        return False
-    except FileNotFoundError:
-        log.error("Agent command not found: %s", cmd[0])
-        return False
+    return ok
 
 
 def seed(

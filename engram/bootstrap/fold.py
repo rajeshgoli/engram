@@ -14,12 +14,12 @@ from __future__ import annotations
 
 import json
 import logging
-import subprocess
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 from engram.config import load_config, resolve_doc_paths
+from engram.dispatch import invoke_agent, read_docs
 from engram.fold.chunker import ChunkResult, next_chunk
 from engram.fold.queue import build_queue
 from engram.linter import lint_post_dispatch
@@ -58,58 +58,12 @@ def _filter_queue_by_date(
     return len(filtered)
 
 
-def _invoke_fold_agent(
-    config: dict[str, Any],
-    project_root: Path,
-    chunk: ChunkResult,
-    correction_text: str | None = None,
-) -> bool:
-    """Shell out to the fold agent for a single chunk.
-
-    Returns True on success.
-    """
-    model = config.get("model", "sonnet")
-    agent_cmd = config.get("agent_command")
-    if agent_cmd:
-        cmd = agent_cmd.split()
-    else:
-        cmd = ["claude", "--print", "--model", model]
-
+def _build_prompt(chunk: ChunkResult, correction_text: str | None = None) -> str:
+    """Read the chunk prompt and optionally append correction context."""
     prompt = chunk.prompt_path.read_text()
     if correction_text:
         prompt = prompt + "\n\n" + correction_text
-    cmd.append(prompt)
-
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            cwd=str(project_root),
-            timeout=600,
-        )
-        if result.returncode != 0:
-            log.error("Fold agent failed (rc=%d): %s", result.returncode, result.stderr[:500])
-            return False
-        return True
-    except subprocess.TimeoutExpired:
-        log.error("Fold agent timed out (10 min)")
-        return False
-    except FileNotFoundError:
-        log.error("Agent command not found: %s", cmd[0])
-        return False
-
-
-def _read_docs(doc_paths: dict[str, Path], keys: tuple[str, ...]) -> dict[str, str]:
-    """Read document contents for the given keys."""
-    contents: dict[str, str] = {}
-    for key in keys:
-        p = doc_paths.get(key)
-        if p and p.exists():
-            contents[key] = p.read_text()
-        else:
-            contents[key] = ""
-    return contents
+    return prompt
 
 
 def _dispatch_and_validate(
@@ -122,7 +76,7 @@ def _dispatch_and_validate(
     Returns True if the chunk was processed successfully.
     """
     doc_paths = resolve_doc_paths(config, project_root)
-    before_contents = _read_docs(
+    before_contents = read_docs(
         doc_paths, ("timeline", "concepts", "epistemic", "workflows"),
     )
 
@@ -132,15 +86,16 @@ def _dispatch_and_validate(
         if attempt > 0:
             log.info("Retry %d/%d for chunk %d", attempt, MAX_RETRIES, chunk.chunk_id)
 
-        ok = _invoke_fold_agent(config, project_root, chunk, correction_text)
+        prompt = _build_prompt(chunk, correction_text)
+        ok = invoke_agent(config, project_root, prompt)
         if not ok:
             continue
 
         # Validate with linter
-        after_contents = _read_docs(
+        after_contents = read_docs(
             doc_paths, ("timeline", "concepts", "epistemic", "workflows"),
         )
-        graveyard_docs = _read_docs(
+        graveyard_docs = read_docs(
             doc_paths, ("concept_graveyard", "epistemic_graveyard"),
         )
 

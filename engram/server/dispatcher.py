@@ -11,7 +11,6 @@ on failure (max 2), and regenerates the L0 briefing after success.
 
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
 from datetime import datetime, timezone
@@ -19,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from engram.config import resolve_doc_paths
+from engram.dispatch import invoke_agent, read_docs
 from engram.fold.chunker import ChunkResult, next_chunk
 from engram.linter import LintResult, lint_post_dispatch
 
@@ -62,7 +62,7 @@ class Dispatcher:
         doc_paths = resolve_doc_paths(self._config, self._project_root)
 
         # Snapshot living docs before dispatch
-        before_contents = _read_docs(doc_paths, ("timeline", "concepts", "epistemic", "workflows"))
+        before_contents = read_docs(doc_paths, ("timeline", "concepts", "epistemic", "workflows"))
 
         # Build the chunk
         try:
@@ -120,7 +120,10 @@ class Dispatcher:
                 log.info("Retry %d/%d for dispatch %d", retry_count, MAX_RETRIES, dispatch_id)
 
             # Shell out to fold agent — on retry, include correction context
-            ok = self._invoke_fold_agent(chunk, correction_text=correction_text)
+            prompt = chunk.prompt_path.read_text()
+            if correction_text:
+                prompt = prompt + "\n\n" + correction_text
+            ok = invoke_agent(self._config, self._project_root, prompt)
             if not ok:
                 self._db.update_dispatch_state(
                     dispatch_id, "dispatched", error="Agent invocation failed",
@@ -128,8 +131,8 @@ class Dispatcher:
                 continue
 
             # Read after state
-            after_contents = _read_docs(doc_paths, ("timeline", "concepts", "epistemic", "workflows"))
-            graveyard_docs = _read_docs(doc_paths, ("concept_graveyard", "epistemic_graveyard"))
+            after_contents = read_docs(doc_paths, ("timeline", "concepts", "epistemic", "workflows"))
+            graveyard_docs = read_docs(doc_paths, ("concept_graveyard", "epistemic_graveyard"))
 
             # Flatten pre-assigned IDs for linter
             pre_assigned: list[str] = []
@@ -165,58 +168,6 @@ class Dispatcher:
             )
 
         return False
-
-    def _invoke_fold_agent(
-        self,
-        chunk: ChunkResult,
-        correction_text: str | None = None,
-    ) -> bool:
-        """Shell out to the configured fold agent CLI.
-
-        Parameters
-        ----------
-        chunk:
-            The chunk being dispatched.
-        correction_text:
-            If provided (on retry), appended to the prompt so the agent
-            sees the lint violations from the previous attempt.
-
-        Returns True if the agent completed successfully.
-        """
-        model = self._config.get("model", "sonnet")
-
-        # Build agent command — configurable via config
-        agent_cmd = self._config.get("agent_command")
-        if agent_cmd:
-            cmd = agent_cmd.split()
-        else:
-            cmd = ["claude", "--print", "--model", model]
-
-        prompt = chunk.prompt_path.read_text()
-        if correction_text:
-            prompt = prompt + "\n\n" + correction_text
-        cmd.append(prompt)
-
-        log.info("Invoking fold agent: %s", " ".join(cmd[:3]) + " ...")
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                cwd=str(self._project_root),
-                timeout=600,  # 10 min timeout
-            )
-            if result.returncode != 0:
-                log.error("Fold agent failed (rc=%d): %s", result.returncode, result.stderr[:500])
-                return False
-            return True
-        except subprocess.TimeoutExpired:
-            log.error("Fold agent timed out (10 min)")
-            return False
-        except FileNotFoundError:
-            log.error("Fold agent command not found: %s", cmd[0])
-            return False
 
     def _regenerate_l0_briefing(self, doc_paths: dict[str, Path]) -> None:
         """Regenerate the L0 briefing section in the project's CLAUDE.md.
@@ -307,10 +258,10 @@ class Dispatcher:
 
             if input_path and input_path.exists():
                 # Re-read docs and try to validate
-                after_contents = _read_docs(
+                after_contents = read_docs(
                     doc_paths, ("timeline", "concepts", "epistemic", "workflows"),
                 )
-                graveyard_docs = _read_docs(
+                graveyard_docs = read_docs(
                     doc_paths, ("concept_graveyard", "epistemic_graveyard"),
                 )
 
@@ -337,10 +288,10 @@ class Dispatcher:
                     ok = self._invoke_fold_agent_from_path(prompt_path, correction_text)
                     if ok:
                         # Re-lint after retry
-                        after2 = _read_docs(
+                        after2 = read_docs(
                             doc_paths, ("timeline", "concepts", "epistemic", "workflows"),
                         )
-                        graveyard2 = _read_docs(
+                        graveyard2 = read_docs(
                             doc_paths, ("concept_graveyard", "epistemic_graveyard"),
                         )
                         result2 = lint(after2, graveyard2, self._config)
@@ -367,29 +318,10 @@ class Dispatcher:
         correction_text: str | None = None,
     ) -> bool:
         """Re-invoke fold agent using a prompt file path (for recovery)."""
-        model = self._config.get("model", "sonnet")
-        agent_cmd = self._config.get("agent_command")
-        if agent_cmd:
-            cmd = agent_cmd.split()
-        else:
-            cmd = ["claude", "--print", "--model", model]
-
         prompt = prompt_path.read_text()
         if correction_text:
             prompt = prompt + "\n\n" + correction_text
-        cmd.append(prompt)
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                cwd=str(self._project_root),
-                timeout=600,
-            )
-            return result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
+        return invoke_agent(self._config, self._project_root, prompt)
 
 
 # ------------------------------------------------------------------
@@ -428,18 +360,6 @@ def _build_correction_text(chunk: ChunkResult, result: LintResult) -> str:
         f"Please fix these violations in the living docs. "
         f"Re-read the input file at {chunk.input_path.resolve()} for context.\n"
     )
-
-
-def _read_docs(doc_paths: dict[str, Path], keys: tuple[str, ...]) -> dict[str, str]:
-    """Read document contents for the given keys."""
-    contents: dict[str, str] = {}
-    for key in keys:
-        p = doc_paths.get(key)
-        if p and p.exists():
-            contents[key] = p.read_text()
-        else:
-            contents[key] = ""
-    return contents
 
 
 def _inject_section(file_path: Path, section_header: str, content: str) -> None:

@@ -65,12 +65,6 @@ model: sonnet
 
     docs_dir = tmp_path / "docs" / "decisions"
     docs_dir.mkdir(parents=True)
-    for key in ("timeline", "concepts", "epistemic", "workflows"):
-        (docs_dir / f"{key.replace('concepts', 'concept_registry').replace('epistemic', 'epistemic_state').replace('workflows', 'workflow_registry').replace('timeline', 'timeline')}.md").write_text(
-            LIVING_DOC_HEADERS[key]
-        )
-
-    # Simpler: just write by resolved name
     (docs_dir / "timeline.md").write_text(LIVING_DOC_HEADERS["timeline"])
     (docs_dir / "concept_registry.md").write_text(LIVING_DOC_HEADERS["concepts"])
     (docs_dir / "epistemic_state.md").write_text(LIVING_DOC_HEADERS["epistemic"])
