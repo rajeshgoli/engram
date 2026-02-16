@@ -1,8 +1,8 @@
 """Forward fold: process artifacts chronologically from a start date to today.
 
 Reuses the queue builder (:mod:`engram.fold.queue`) and chunker
-(:mod:`engram.fold.chunker`) with date filtering. Iterates:
-build queue → filter by date → chunk → dispatch → validate → repeat
+(:mod:`engram.fold.chunker`). Iterates:
+build queue (with start_date filter) → chunk → dispatch → validate → repeat
 until the queue is exhausted.
 
 Used by:
@@ -12,7 +12,6 @@ Used by:
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import date
 from pathlib import Path
@@ -29,34 +28,6 @@ log = logging.getLogger(__name__)
 
 MAX_RETRIES = 2
 
-
-def _filter_queue_by_date(
-    project_root: Path,
-    from_date: date,
-) -> int:
-    """Filter the queue JSONL to only include entries on or after *from_date*.
-
-    Modifies the queue file in place. Returns the number of entries remaining.
-    """
-    queue_file = project_root / ".engram" / "queue.jsonl"
-    if not queue_file.exists():
-        return 0
-
-    cutoff = from_date.isoformat()
-    with open(queue_file) as fh:
-        entries = [json.loads(line) for line in fh if line.strip()]
-
-    filtered = [e for e in entries if e["date"][:10] >= cutoff]
-
-    with open(queue_file, "w") as fh:
-        for entry in filtered:
-            fh.write(json.dumps(entry) + "\n")
-
-    removed = len(entries) - len(filtered)
-    if removed:
-        log.info("Filtered queue: removed %d entries before %s, %d remaining",
-                 removed, from_date, len(filtered))
-    return len(filtered)
 
 
 def _build_prompt(chunk: ChunkResult, correction_text: str | None = None) -> str:
@@ -162,22 +133,19 @@ def forward_fold(
     if config is None:
         config = load_config(project_root)
 
-    # Step 1: Build the full queue
+    # Step 1: Build queue (filtered by from_date)
     log.info("Building queue...")
-    entries = build_queue(config, project_root)
-    log.info("Queue built: %d total entries", len(entries))
+    entries = build_queue(config, project_root, start_date=from_date.isoformat())
+    remaining = len(entries)
+    log.info("Queue built: %d entries from %s forward", remaining, from_date)
 
-    # Step 2: Filter by date
-    remaining = _filter_queue_by_date(project_root, from_date)
     if remaining == 0:
         log.info("No entries to process after %s", from_date)
         db = ServerDB(project_root / ".engram" / "engram.db")
         db.clear_fold_from()
         return True
 
-    log.info("Processing %d entries from %s forward", remaining, from_date)
-
-    # Step 3: Iterate chunks until queue exhausted
+    # Step 2: Iterate chunks until queue exhausted
     chunk_count = 0
     failures = 0
 

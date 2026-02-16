@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +32,7 @@ def build_queue(
     config: dict[str, Any],
     project_root: Path,
     output_dir: Path | None = None,
+    start_date: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build the chronological queue of all artifacts.
 
@@ -40,6 +41,9 @@ def build_queue(
         project_root: Absolute path to the project root.
         output_dir: Directory for queue.jsonl and item_sizes.json.
             Defaults to project_root / ".engram".
+        start_date: Optional YYYY-MM-DD string. When set, only entries
+            with ``date[:10] >= start_date`` are included in the queue
+            and output files. Validated via ``date.fromisoformat()``.
 
     Returns:
         List of queue entry dicts, sorted by date.
@@ -155,15 +159,13 @@ def build_queue(
     sessions_dir = output_dir / "sessions"
     sessions_dir.mkdir(parents=True, exist_ok=True)
 
+    # Collect sessions without writing files yet
+    pending_sessions: list[tuple[dict[str, Any], str, str]] = []
     for se in session_entries:
-        # Write rendered content for later retrieval by chunker
-        session_file = sessions_dir / f"{se.session_id}.md"
-        session_file.write_text(se.rendered)
-
-        rel_path = str(session_file.relative_to(project_root))
+        rel_path = str((sessions_dir / f"{se.session_id}.md").relative_to(project_root))
         sizes[rel_path] = se.chars
 
-        entries.append({
+        entry: dict[str, Any] = {
             "date": se.date,
             "type": "prompts",
             "path": rel_path,
@@ -171,10 +173,23 @@ def build_queue(
             "pass": "initial",
             "session_id": se.session_id,
             "prompt_count": se.prompt_count,
-        })
+        }
+        pending_sessions.append((entry, se.session_id, se.rendered))
+        entries.append(entry)
 
     # Sort by date
     entries.sort(key=lambda e: e["date"])
+
+    # Filter by start_date if provided
+    if start_date:
+        date.fromisoformat(start_date)  # Validates YYYY-MM-DD; raises ValueError
+        entries = [e for e in entries if e["date"][:10] >= start_date]
+
+    # Write only surviving session files
+    surviving_paths = {e["path"] for e in entries if e["type"] == "prompts"}
+    for entry, session_id, rendered in pending_sessions:
+        if entry["path"] in surviving_paths:
+            (sessions_dir / f"{session_id}.md").write_text(rendered)
 
     # Write queue JSONL
     queue_file = output_dir / "queue.jsonl"

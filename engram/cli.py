@@ -147,14 +147,33 @@ def init(project_root: str) -> None:
     default=".",
     help="Project root directory (default: cwd).",
 )
-def build_queue_cmd(project_root: str) -> None:
+@click.option(
+    "--start-date",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    default=None,
+    help="Only include entries on or after this date (YYYY-MM-DD).",
+)
+def build_queue_cmd(project_root: str, start_date: object) -> None:
     """Build chronological queue of all project artifacts."""
     from engram.config import load_config
     from engram.fold.queue import build_queue
+    from engram.server.db import ServerDB
 
     root = Path(project_root)
     config = load_config(root)
-    entries = build_queue(config, root)
+
+    # Resolve start_date: explicit flag > DB marker > None
+    db = ServerDB(root / ".engram" / "engram.db")
+    fold_from = db.get_fold_from()
+
+    if start_date:
+        effective_start = start_date.date().isoformat()  # type: ignore[union-attr]
+    elif fold_from:
+        effective_start = fold_from
+    else:
+        effective_start = None
+
+    entries = build_queue(config, root, start_date=effective_start)
 
     doc_count = sum(1 for e in entries if e["type"] == "doc")
     revisit_count = sum(
