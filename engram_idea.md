@@ -1,4 +1,4 @@
-# Institutional Knowledge System (#1439)
+# Engram: Persistent Memory for AI Agents (#1)
 
 **Status:** v3 design — under review
 **Date:** 2026-02-15 (v3), 2026-02-10 (v2)
