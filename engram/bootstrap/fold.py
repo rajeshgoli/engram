@@ -140,9 +140,10 @@ def forward_fold(
     remaining = len(entries)
     log.info("Queue built: %d entries from %s forward", remaining, from_date)
 
+    db = ServerDB(project_root / ".engram" / "engram.db")
+
     if remaining == 0:
         log.info("No entries to process after %s", from_date)
-        db = ServerDB(project_root / ".engram" / "engram.db")
         db.clear_fold_from()
         return True
 
@@ -187,7 +188,6 @@ def forward_fold(
         doc_paths = resolve_doc_paths(config, project_root)
         regenerate_l0_briefing(config, project_root, doc_paths)
 
-    db = ServerDB(project_root / ".engram" / "engram.db")
     db.clear_fold_from()
     log.info("Forward fold completed successfully (%d chunks)", chunk_count)
     return True
