@@ -375,3 +375,93 @@ def status(project_root: str) -> None:
         click.echo(f"\nLast poll: {state['last_poll_time']}")
     if state.get("last_dispatch_time"):
         click.echo(f"Last dispatch: {state['last_dispatch_time']}")
+
+
+@cli.command()
+@click.option(
+    "--project-root",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    default=".",
+    help="Project root directory (default: cwd).",
+)
+@click.option(
+    "--from-date",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    default=None,
+    help="Seed from historical snapshot at this date, then fold forward (Path A).",
+)
+def seed(project_root: str, from_date: object) -> None:
+    """Bootstrap: seed living docs from repo snapshot.
+
+    Without --from-date (Path B): seeds from current repo state.
+    With --from-date (Path A): checks out snapshot at date, seeds, folds forward.
+    """
+    import logging
+
+    from engram.bootstrap.seed import seed as run_seed
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    root = Path(project_root)
+    seed_date = from_date.date() if from_date else None  # type: ignore[union-attr]
+
+    if seed_date:
+        click.echo(f"Seeding from snapshot at {seed_date}...")
+    else:
+        click.echo("Seeding from current repo state...")
+
+    success = run_seed(root, from_date=seed_date)
+
+    if success:
+        click.echo("Seed complete.")
+    else:
+        click.echo("Seed failed.")
+        raise SystemExit(1)
+
+
+@cli.command()
+@click.option(
+    "--project-root",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    default=".",
+    help="Project root directory (default: cwd).",
+)
+@click.option(
+    "--from",
+    "from_date",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    required=True,
+    help="Process artifacts from this date forward (YYYY-MM-DD).",
+)
+def fold(project_root: str, from_date: object) -> None:
+    """Forward fold: process artifacts from a date to today.
+
+    Builds the queue, filters to entries >= the given date, then processes
+    each chunk through the fold agent. Used after migration (Path C) or
+    internally by seed --from-date (Path A).
+    """
+    import logging
+
+    from engram.bootstrap.fold import forward_fold
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    root = Path(project_root)
+    fold_date = from_date.date()  # type: ignore[union-attr]
+
+    click.echo(f"Forward fold from {fold_date}...")
+    success = forward_fold(root, fold_date)
+
+    if success:
+        click.echo("Forward fold complete.")
+    else:
+        click.echo("Forward fold completed with errors.")
+        raise SystemExit(1)

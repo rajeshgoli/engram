@@ -617,10 +617,10 @@ class TestContextBuffer:
 class TestDispatcherHelpers:
     def test_read_docs(self, project: Path, config: dict) -> None:
         from engram.config import resolve_doc_paths
-        from engram.server.dispatcher import _read_docs
+        from engram.dispatch import read_docs
 
         doc_paths = resolve_doc_paths(config, project)
-        contents = _read_docs(doc_paths, ("timeline", "concepts"))
+        contents = read_docs(doc_paths, ("timeline", "concepts"))
         assert "# Timeline" in contents["timeline"]
         assert "# Concept Registry" in contents["concepts"]
 
