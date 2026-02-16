@@ -22,6 +22,7 @@ from engram.dispatch import invoke_agent, read_docs
 from engram.fold.chunker import ChunkResult, next_chunk
 from engram.fold.queue import build_queue
 from engram.linter import lint_post_dispatch
+from engram.server.briefing import regenerate_l0_briefing
 from engram.server.db import ServerDB
 
 log = logging.getLogger(__name__)
@@ -179,6 +180,12 @@ def forward_fold(
     if failures:
         log.warning("Forward fold completed with %d failed chunk(s)", failures)
         return False
+
+    # Regenerate L0 briefing once after all chunks complete
+    if chunk_count > 0:
+        log.info("Regenerating L0 briefing...")
+        doc_paths = resolve_doc_paths(config, project_root)
+        regenerate_l0_briefing(config, project_root, doc_paths)
 
     db = ServerDB(project_root / ".engram" / "engram.db")
     db.clear_fold_from()

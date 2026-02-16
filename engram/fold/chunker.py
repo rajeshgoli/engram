@@ -71,6 +71,31 @@ class ChunkResult:
 
 
 # ------------------------------------------------------------------
+# Queue drain predicate
+# ------------------------------------------------------------------
+
+
+def queue_is_empty(project_root: Path) -> bool:
+    """Return True if the dispatch queue is drained.
+
+    Checks ``.engram/queue.jsonl``: returns True if the file is missing,
+    empty, or contains zero entries.  This is the drain predicate used
+    to decide when L0 briefing should regenerate.
+    """
+    queue_file = project_root / ".engram" / "queue.jsonl"
+    if not queue_file.exists():
+        return True
+    try:
+        text = queue_file.read_text()
+    except OSError:
+        return True
+    for line in text.splitlines():
+        if line.strip():
+            return False
+    return True
+
+
+# ------------------------------------------------------------------
 # Drift detection
 # ------------------------------------------------------------------
 

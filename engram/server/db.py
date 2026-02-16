@@ -97,6 +97,12 @@ class ServerDB:
             except sqlite3.OperationalError:
                 pass  # Column already exists
 
+            # Add l0_stale column (idempotent)
+            try:
+                conn.execute("ALTER TABLE server_state ADD COLUMN l0_stale INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
             # Ensure singleton row exists
             conn.execute(
                 "INSERT OR IGNORE INTO server_state (id, buffer_chars_total) VALUES (1, 0)"
@@ -434,6 +440,43 @@ class ServerDB:
         finally:
             conn.close()
 
+    # ------------------------------------------------------------------
+    # L0 stale flag
+    # ------------------------------------------------------------------
+
+    def mark_l0_stale(self) -> None:
+        """Set l0_stale = 1 to indicate briefing needs regeneration."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE server_state SET l0_stale = 1 WHERE id = 1"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def clear_l0_stale(self) -> None:
+        """Set l0_stale = 0 after successful briefing regeneration."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE server_state SET l0_stale = 0 WHERE id = 1"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def is_l0_stale(self) -> bool:
+        """Return True if L0 briefing needs regeneration."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT l0_stale FROM server_state WHERE id = 1"
+            ).fetchone()
+            return bool(row["l0_stale"]) if row else False
+        finally:
+            conn.close()
+
     def update_server_state(self, **kwargs: Any) -> None:
         """Update fields on the server_state singleton.
 
@@ -473,7 +516,7 @@ class ServerDB:
         Recovery strategy per state:
         - building: discard (rebuild from buffer)
         - dispatched: needs re-check or re-dispatch (returned to caller)
-        - validated: L0 regen incomplete (returned to caller)
+        - validated: mark L0 stale + committed (deferred to queue drain)
 
         Returns list of dispatch records needing attention.
         """

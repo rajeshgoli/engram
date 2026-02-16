@@ -12,6 +12,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+from engram.config import resolve_doc_paths
+from engram.fold.chunker import queue_is_empty
+from engram.server.briefing import regenerate_l0_briefing
 from engram.server.buffer import ContextBuffer
 from engram.server.db import ServerDB
 from engram.server.dispatcher import Dispatcher
@@ -51,6 +54,13 @@ def run_server(config: dict[str, Any], project_root: Path) -> None:
     for d in stale:
         log.info("Recovering dispatch %d (state=%s)", d["id"], d["state"])
         dispatcher.recover_dispatch(d)
+
+    # --- Startup L0 check (quiet restart with stale flag) ---
+    if db.is_l0_stale() and queue_is_empty(project_root):
+        log.info("Startup: regenerating stale L0 briefing...")
+        doc_paths = resolve_doc_paths(config, project_root)
+        if regenerate_l0_briefing(config, project_root, doc_paths):
+            db.clear_l0_stale()
 
     # --- Callback for watchers ---
     def on_change(
@@ -121,6 +131,14 @@ def run_server(config: dict[str, Any], project_root: Path) -> None:
                     log.info("Dispatch completed successfully")
                 else:
                     log.warning("Dispatch failed")
+
+            # Unconditional L0 check — runs every iteration, not nested
+            if db.is_l0_stale() and queue_is_empty(project_root):
+                log.info("Queue drained: regenerating L0 briefing...")
+                doc_paths = resolve_doc_paths(config, project_root)
+                if regenerate_l0_briefing(config, project_root, doc_paths):
+                    db.clear_l0_stale()
+                # If regen fails, l0_stale stays set — next iteration retries
 
             # Update poll time
             db.update_server_state(
