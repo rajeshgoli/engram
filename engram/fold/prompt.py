@@ -1,0 +1,161 @@
+"""Jinja2 template rendering for fold prompts."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any
+
+from jinja2 import Environment, FileSystemLoader
+
+_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+
+
+def _basename(value: str) -> str:
+    """Jinja2 filter: extract basename from a path string."""
+    return os.path.basename(value)
+
+
+def _get_env() -> Environment:
+    """Create a Jinja2 environment loading from engram/templates/."""
+    env = Environment(
+        loader=FileSystemLoader(str(_TEMPLATES_DIR)),
+        trim_blocks=True,
+        lstrip_blocks=True,
+        keep_trailing_newline=True,
+    )
+    env.filters["basename"] = _basename
+    return env
+
+
+def _stringify_paths(doc_paths: dict[str, Path]) -> dict[str, str]:
+    """Convert Path values to strings for template rendering."""
+    return {k: str(v) for k, v in doc_paths.items()}
+
+
+def render_chunk_input(
+    *,
+    chunk_id: int,
+    date_range: str,
+    items_content: str,
+    orphan_advisory: str,
+    pre_assigned_ids: dict[str, list[str]],
+    doc_paths: dict[str, Path],
+) -> str:
+    """Render a normal fold chunk's input.md file.
+
+    Combines system instructions (from fold_prompt.md template) with
+    pre-assigned IDs, orphan advisory, and item content.
+    """
+    env = _get_env()
+    template = env.get_template("fold_prompt.md")
+
+    instructions = template.render(
+        doc_paths=_stringify_paths(doc_paths),
+        pre_assigned_ids=pre_assigned_ids,
+    )
+
+    content = instructions
+    content += f"\n# New Content ({date_range})\n"
+    content += f"# Chunk {chunk_id}\n\n"
+
+    if orphan_advisory:
+        content += orphan_advisory
+
+    content += items_content
+    return content
+
+
+def render_triage_input(
+    *,
+    drift_type: str,
+    drift_report: Any,
+    chunk_id: int,
+    doc_paths: dict[str, Path],
+) -> str:
+    """Render a drift-triage chunk's input.md file."""
+    env = _get_env()
+    template = env.get_template("triage_prompt.md")
+
+    if drift_type == "orphan_triage":
+        entries = drift_report.orphaned_concepts
+    elif drift_type == "contested_review":
+        entries = drift_report.contested_claims
+    elif drift_type == "stale_unverified":
+        entries = drift_report.stale_unverified
+    elif drift_type == "workflow_synthesis":
+        entries = drift_report.workflow_repetitions
+    else:
+        entries = []
+
+    return template.render(
+        drift_type=drift_type,
+        entries=entries,
+        chunk_id=chunk_id,
+        doc_paths=_stringify_paths(doc_paths),
+        entry_count=len(entries),
+    )
+
+
+def render_agent_prompt(
+    *,
+    chunk_id: int,
+    date_range: str,
+    input_path: Path,
+    doc_paths: dict[str, Path],
+) -> str:
+    """Render the chunk_NNN_prompt.txt agent execution prompt.
+
+    This is the self-contained instruction file sent to the fold agent.
+    """
+    living_doc_keys = ["timeline", "concepts", "epistemic", "workflows"]
+    doc_list = "\n".join(
+        f"{i + 1}. {doc_paths[k]}" for i, k in enumerate(living_doc_keys)
+    )
+    graveyard_list = "\n".join([
+        f"- {doc_paths['concept_graveyard']}",
+        f"- {doc_paths['epistemic_graveyard']}",
+    ])
+
+    return (
+        f"You are processing a knowledge fold chunk.\n"
+        f"\n"
+        f"IMPORTANT CONSTRAINTS:\n"
+        f"- Do NOT use the Task tool or spawn sub-agents. Do all work directly.\n"
+        f"- Do NOT use Write to overwrite entire files. Use Edit for surgical updates only.\n"
+        f"- Be SUCCINCT. High information density, no filler, no narrative prose.\n"
+        f"\n"
+        f"Read the input file at {input_path.resolve()} — it contains system instructions\n"
+        f"and new content covering {date_range}.\n"
+        f"\n"
+        f"Follow the instructions in that file. Update these 4 living documents:\n"
+        f"\n"
+        f"{doc_list}\n"
+        f"\n"
+        f"Graveyard files (append-only, for DEAD/refuted entries):\n"
+        f"\n"
+        f"{graveyard_list}\n"
+        f"\n"
+        f"Read each living doc first, then make surgical edits based on the chunk content.\n"
+        f"\n"
+        f"Rules:\n"
+        f"- Extract concepts, claims, timeline events, workflows from the chunk\n"
+        f"- USER PROMPTS encode the project owner's intent — they are authoritative\n"
+        f"- DEAD/refuted entries: 1-2 sentences max. Key lesson + what replaced it.\n"
+        f"- Process ALL items in the chunk\n"
+        f"- Use ONLY pre-assigned IDs for new entries (listed in the input file)\n"
+    )
+
+
+def render_seed_prompt(
+    *,
+    doc_paths: dict[str, Path],
+    pre_assigned_ids: dict[str, list[str]] | None = None,
+) -> str:
+    """Render a bootstrap seed prompt."""
+    env = _get_env()
+    template = env.get_template("seed_prompt.md")
+    return template.render(
+        doc_paths=_stringify_paths(doc_paths),
+        pre_assigned_ids=pre_assigned_ids or {},
+    )
