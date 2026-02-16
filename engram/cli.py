@@ -119,9 +119,9 @@ def init(project_root: str) -> None:
     config_path.write_text(CONFIG_TEMPLATE)
     click.echo(f"Created {config_path}")
 
-    # Parse config to get doc paths
-    import yaml
-    config = yaml.safe_load(CONFIG_TEMPLATE)
+    # Load config through the standard path to validate it
+    from engram.config import load_config
+    config = load_config(root)
 
     # Create living docs with schema headers
     for key, rel_path in config["living_docs"].items():

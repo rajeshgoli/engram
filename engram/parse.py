@@ -21,13 +21,14 @@ class Section(TypedDict):
 
 # Matches status annotations in headings like "## Name (DEAD)" or "## Name (EVOLVED → C089)"
 STATUS_RE = re.compile(r'\((DEAD|refuted|EVOLVED[^)]*|CONTESTED|believed|unverified'
-                        r'|CURRENT|SUPERSEDED[^)]*|MERGED[^)]*)\)\s*$')
+                        r'|CURRENT|SUPERSEDED[^)]*|MERGED[^)]*)\)\s*$',
+                        re.IGNORECASE)
 
 # Matches stable ID prefixes: C042, E007, W003
-STABLE_ID_RE = re.compile(r'^##\s+([CEW]\d{3}):\s+')
+STABLE_ID_RE = re.compile(r'^##\s+([CEW]\d{3,}):\s+')
 
 # Matches graveyard pointer stubs: "## C012: name (DEAD) → concept_graveyard.md#C012"
-STUB_RE = re.compile(r'^##\s+([CEW]\d{3}):.+→\s+(\S+)$')
+STUB_RE = re.compile(r'^##\s+([CEW]\d{3,}):.+→\s+(\S+)$')
 
 # Matches phase headings in timeline: "## Phase: Name (Period)"
 PHASE_RE = re.compile(r'^##\s+Phase:\s+(.+)$')
@@ -91,4 +92,4 @@ def extract_stub_target(heading: str) -> tuple[str, str] | None:
 
 def extract_referenced_ids(text: str) -> set[str]:
     """Find all stable ID references (C###, E###, W###) in text."""
-    return set(re.findall(r'\b([CEW]\d{3})\b', text))
+    return set(re.findall(r'\b([CEW]\d{3,})\b', text))
