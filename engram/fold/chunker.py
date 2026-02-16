@@ -39,9 +39,9 @@ class DriftReport:
         """
         if len(self.orphaned_concepts) > thresholds.get("orphan_triage", 50):
             return "orphan_triage"
-        if self.contested_claims:
+        if len(self.contested_claims) > thresholds.get("contested_review", 5):
             return "contested_review"
-        if self.stale_unverified:
+        if len(self.stale_unverified) > thresholds.get("stale_unverified", 10):
             return "stale_unverified"
         if len(self.workflow_repetitions) > thresholds.get("workflow_repetition", 3):
             return "workflow_synthesis"
@@ -219,7 +219,8 @@ def compute_budget(config: dict, doc_paths: dict[str, Path]) -> tuple[int, int]:
             living_docs_chars += len(p.read_text())
 
     remaining = context_limit - living_docs_chars - overhead
-    return min(remaining, max_chunk), living_docs_chars
+    budget = min(max(0, remaining), max_chunk)
+    return budget, living_docs_chars
 
 
 # ------------------------------------------------------------------
