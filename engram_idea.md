@@ -68,6 +68,42 @@ Events (git push, issue filed, PR merged, doc saved)
 
 **Dispatch frequency is self-regulating.** Busy days fill the buffer faster, producing more dispatches. Quiet periods accumulate slowly. The budget-based cutting handles this naturally.
 
+### Server Mechanics
+
+**Process model:** Long-running foreground process (`engram run`). No daemonization — the user's process manager (systemd, launchd, tmux, etc.) handles supervision. The server is stateless on startup: it reads its state from SQLite, determines where it left off, and resumes.
+
+**Watch mechanism:** Filesystem events via `watchdog` on configured source directories (docs, issues). For git events (commits, pushes), periodic polling (`git log --since`) on a configurable interval (default: 60s). Polling is simpler and more reliable than git hooks across environments.
+
+**State persistence (SQLite):** A single `engram.db` file in the `.engram/` directory. Four tables:
+
+| Table | Purpose |
+|-------|---------|
+| `buffer_items` | Accumulated context items pending dispatch (path, type, chars, date, drift_type) |
+| `dispatches` | Dispatch lifecycle: chunk_id, state (building → dispatched → validated → committed), timestamps, retry count |
+| `id_counters` | Current next-available ID per category (C, E, W). Replaces flat `id_counters.json`. |
+| `server_state` | Singleton row: last_poll_commit, last_dispatch_time, buffer_chars_total |
+
+**Why SQLite, not flat files:** The server must update buffer contents and dispatch state atomically. A crash between writing `queue.jsonl` and `manifest.yaml` leaves inconsistent state. SQLite gives atomic transactions, WAL-mode crash recovery, and queryable history — for free (stdlib `sqlite3`). No external dependency.
+
+**Dispatch mechanics:** Serial, one chunk at a time. When buffer is full or drift threshold is hit:
+
+1. Build chunk (budget calculation, drift priority, ID pre-allocation) — pure CPU
+2. Write `chunk_NNN_input.md` to `.engram/chunks/`
+3. Update dispatch state → `dispatched`
+4. Shell out to fold agent CLI (`claude`, `codex`, or configured command) with the chunk file
+5. On return: run schema linter
+6. If linter fails: update state → `retry`, re-dispatch with correction prompt (max 2 retries)
+7. If linter passes: update state → `validated`, regenerate L0 briefing (Haiku-class call), update state → `committed`
+
+**Concurrency:** None. Events arriving during a dispatch accumulate in the buffer (SQLite writes are non-blocking). The next dispatch picks them up. This is deliberate — concurrent dispatches would require ID range coordination and merge conflict resolution. Serial processing with pre-assigned IDs is simpler and sufficient for the event rates involved (1-5 dispatches/week).
+
+**Crash recovery:** On startup, the server checks `dispatches` for any row in a non-terminal state:
+- `building` → discard, rebuild from buffer
+- `dispatched` → agent may have completed; check for living doc changes, re-lint if found, otherwise re-dispatch
+- `validated` → L0 regen didn't complete; regenerate and mark `committed`
+
+No manual intervention needed. The chunk input file is self-contained, so re-dispatch is always safe.
+
 ### Scheduling Priority
 
 The server fills each chunk using a priority system, not purely chronological order:
@@ -251,23 +287,49 @@ This is strictly better than git-history-based preservation. Git history works b
 
 ## Bootstrap
 
-### For New Projects: Snapshot + Incremental
+Three paths to get living docs initialized. All end the same way: server starts watching for future changes.
 
-Instead of processing all history from the first commit, drop an agent into the repo at a specific date and build understanding from there.
+### Path A: Seed from a date
 
-**Phase 1 — Seed:** An agent reads the repo as it exists today: code structure, existing docs, recent issues. Produces initial living docs — a snapshot understanding, like onboarding a new engineer.
+For projects with history worth capturing. Pick a start date, seed from that snapshot, fold forward to today.
 
-**Phase 2 — Server starts:** The knowledge server begins watching for changes. From this point, every change is tracked incrementally.
+1. **Checkout snapshot:** `git worktree add` at the commit nearest the chosen date. Ephemeral — never touches the user's working tree.
+2. **Seed:** An agent reads the repo at that snapshot: code structure, docs, recent issues as of that date. Produces initial 4 living docs + 2 graveyard files — a point-in-time understanding, like onboarding an engineer on that day.
+3. **Fold forward:** Process all artifacts (commits, issues, doc changes) from the start date to today using the standard chronological fold. The agent's understanding evolves in the same direction the project did.
+4. **Server starts:** Knowledge server begins watching for future changes.
 
-**Phase 3 — Optional deep fold:** If historical context matters (e.g., understanding why certain designs exist), process artifacts back to a configurable start date. This is the historical fold — useful but not required.
+Cost scales with the date range: a 2-month window is ~$2-5, a 6-month window is ~$10-15. The user controls cost by choosing the start date.
 
-| Approach | Cost | Lifecycle history | When to use |
-|----------|------|-------------------|-------------|
-| Snapshot only | ~$0.50-1 | None (current state only) | New projects, small repos |
-| Snapshot + fold from date | ~$2-5 | Partial (from chosen date) | Projects with significant recent evolution |
-| Full historical fold | ~$15-25 | Complete | Projects where design rationale matters deeply |
+### Path B: Seed from today
 
-For fractal-market-simulator: the 17 chunks already processed (Oct–Jan 1) cover the early architecture and major pivots. Preserve those living docs as the seed, then let the server run forward from the current date.
+For new projects or when history doesn't matter. Cheapest path.
+
+1. **Seed:** Agent reads the repo as it exists today. Produces initial living docs from current state only — no lifecycle history, no evolution context.
+2. **Server starts.**
+
+Cost: ~$0.50-1. No fold step.
+
+### Path C: Adopt existing v2 docs
+
+For projects with pre-existing living docs from the v2 fold (e.g., fractal-market-simulator with 17 chunks covering Oct–Jan 1). Preserves prior work, upgrades to v3 format, fills the gap.
+
+1. **Migrate:** Take existing v2 living docs and upgrade to v3:
+   - Backfill stable IDs (C###/E###/W###) onto existing entries in document order
+   - Extract workflow entries from existing docs into the new 4th doc (workflow_registry.md)
+   - Move existing DEAD/refuted entries to graveyard files, leave STUBs in living docs
+   - Rewrite name-based cross-references to use stable IDs
+   - Initialize `id_counters.json` from max assigned IDs
+   - Set fold continuation marker (the date where v2 processing stopped)
+2. **Fold forward:** Process artifacts from the continuation date to today. Bridges the gap between where v2 stopped and now.
+3. **Server starts.**
+
+Cost: migration is ~$0.50 (mostly mechanical). Fold-forward cost depends on the gap size.
+
+| Path | Cost | Lifecycle history | When to use |
+|------|------|-------------------|-------------|
+| A: Seed from date | ~$2-15 (scales with range) | From chosen date forward | Projects with significant evolution worth capturing |
+| B: Seed from today | ~$0.50-1 | None (current state only) | New projects, small repos |
+| C: Adopt existing | ~$0.50 + fold gap | Preserves prior v2 work | Projects with existing v2 living docs |
 
 ### Dual-Pass (Bootstrap Only)
 
@@ -442,10 +504,10 @@ The knowledge server is project-agnostic. Standalone public repo.
 | Standalone repo (public) | Project repo (stays) |
 |---|---|
 | Server daemon / CLI | 4 living docs + 2 graveyard files |
-| Fold agent prompt templates | `local_data/` (chunks, queue, issues) |
-| Schema linter | Config file (paths, thresholds, model) |
-| Doc schemas + examples | `.claude/` integration hooks |
-| This methodology doc (README) | Project-specific CLAUDE.md briefing |
+| Fold agent prompt templates | `.engram/engram.db` (server state) |
+| Schema linter | `.engram/chunks/` (chunk input files) |
+| Doc schemas + examples | `.engram/config.yaml` |
+| This methodology doc (README) | Project-specific CLAUDE.md briefing (L0) |
 
 ### Project Config
 
@@ -469,11 +531,11 @@ briefing: # L0 target
 
 sources:
   issues: local_data/issues/
-  sessions: local_data/sessions/
   docs:
     - docs/working/
     - docs/archive/
     - docs/specs/
+  # sessions: deferred — requires generic session format definition
 
 thresholds:
   orphan_triage: 50
@@ -523,11 +585,11 @@ Design principle: **make failure cheap and recovery automatic.** Schema linter +
 ## Deliverables
 
 1. [ ] Standalone repo with server, linter, prompt templates, config schema
-2. [ ] Stable ID migration for existing living docs (one-time, from v2)
+2. [ ] Stable ID migration for existing living docs (one-time, from v2) — includes 4th doc extraction, graveyard bootstrapping, fold continuation marker
 3. [ ] 4th living doc: workflow_registry.md
 4. [ ] Graveyard files + compaction migration
-5. [ ] Bootstrap seed mode (snapshot + incremental)
-6. [ ] Server daemon (watch → accumulate → dispatch → validate)
+5. [ ] Bootstrap: three paths (seed-from-date, seed-from-today, adopt-existing-v2)
+6. [ ] Server daemon with SQLite state (watch → accumulate → dispatch → validate → crash recovery)
 7. [ ] L0 briefing auto-generation
 8. [ ] Integration hooks for project repos (file_issue skill, etc.)
 
@@ -599,6 +661,16 @@ The chronological sequence carries lifecycle information that batch processing l
 ### Why full docs + separate compression?
 
 Investigation needs full detail (L1). Session initialization needs a compressed briefing (L0). Different consumers, different needs. The server generates L0 from L1 after each dispatch — a cheap Haiku-class call.
+
+### Why SQLite for server state, but markdown for graveyard?
+
+Different access patterns. The server needs atomic multi-table updates (consume buffer items + record dispatch in one transaction) and crash recovery — exactly what SQLite provides. Flat files (queue JSONL + manifest YAML + counter JSON) require multi-file coordination with no atomicity; a crash between any two writes leaves inconsistent state.
+
+Graveyard files have the opposite profile: append-only, slow growth (~500 chars/entry), and their primary consumer is the fold agent, which reads files. Even a project with 1,000 dead concepts stays under 1MB. SQLite graveyard would require an extraction step before every dispatch (query → write temp markdown → include in chunk). That's complexity for a problem that doesn't exist yet. If graveyard querying becomes a bottleneck at scale, migration to SQLite is straightforward since entries are already ID-keyed.
+
+### Why seed from a date, not from today?
+
+Seeding from today then folding backward creates a temporal inversion: the agent understands current code but then processes historical artifacts referencing states it never saw. Seeding from a chosen date and folding forward means the agent's understanding evolves in the same direction the project did. Concepts are born, evolve, and die in order. No contradictions from future knowledge leaking into past processing.
 
 ### Why project config, not convention?
 
