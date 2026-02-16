@@ -95,7 +95,7 @@ Events (git push, issue filed, PR merged, doc saved)
 
 **Process model:** Long-running foreground process (`engram run`). No daemonization — the user's process manager (systemd, launchd, tmux, etc.) handles supervision. The server is stateless on startup: it reads its state from SQLite, determines where it left off, and resumes.
 
-**Watch mechanism:** Filesystem events via `watchdog` on configured source directories (docs, issues). For git events (commits, pushes), periodic polling (`git log --since`) on a configurable interval (default: 60s). Polling is simpler and more reliable than git hooks across environments.
+**Watch mechanism:** Filesystem events via `watchdog` on configured source directories (docs, issues). For git events (commits, pushes), periodic polling (`git log --since`) on a configurable interval (default: 60s). For session history (e.g., `~/.claude/history.jsonl`), file mtime polling on the same interval — new entries since last poll are filtered by `project_match` and added to the buffer. Polling is simpler and more reliable than git hooks or inotify across environments.
 
 **State persistence (SQLite):** A single `engram.db` file in the `.engram/` directory. Four tables:
 
@@ -559,7 +559,7 @@ sources:
     - docs/archive/
     - docs/specs/
   sessions:
-    format: claude-code           # Built-in: claude-code, codex. Extensible.
+    format: claude-code           # Built-in: claude-code. Planned: codex.
     path: ~/.claude/history.jsonl  # Default for claude-code format
     project_match:                 # Filter sessions to this project (substring match on project path)
       - my-project

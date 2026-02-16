@@ -99,6 +99,7 @@ engram/
 │   ├── test_linter.py
 │   ├── test_graveyard.py
 │   ├── test_sources.py
+│   ├── test_sessions.py
 │   └── test_migrate.py
 └── examples/
     └── config.yaml          # Example project config
@@ -132,14 +133,14 @@ Port the artifact ingestion pipeline:
 - `engram/fold/sources.py`: `pull_issues()`, `_render_issue_markdown()`, `_get_doc_git_dates()`, `_parse_frontmatter_date()`, `_extract_issue_number()`, `_parse_date()`, `_git_diff_summary()` (new — v2 has this at lines 526-580 on `dev`)
 - `engram/fold/sessions.py`: pluggable session adapter interface. Built-in adapters:
   - `claude-code`: parse `~/.claude/history.jsonl`, group by session, filter by `project_match` config, render as markdown (port from v2 lines 432-497). User prompts are the most information-dense source — they carry decisions, corrections, and rationale that no other artifact captures.
-  - `codex`: parse Codex session history (format TBD, stub adapter)
+  - `codex`: planned, not in this epic (stub adapter with format TBD)
 - `engram/fold/queue.py`: `build_queue()` — parameterized by config, outputs JSONL. Includes session entries alongside docs and issues.
 - All paths from config, no hardcoded values
 - CLI command: `engram build-queue`
 
 **Port from v2 (`dev` branch):** `pull_issues` (lines 239-263), `build_queue` (lines 332-523), date/git helper functions (lines 266-329), `_git_diff_summary` (lines 526-580), session parsing (lines 432-497) parameterized via config `sessions.project_match` (replaces hardcoded `PROJECT_PATHS` filter at line 68).
 
-**Acceptance:** `engram build-queue` on a test repo produces correct JSONL including session entries. Claude Code history adapter correctly filters by project, groups by session, renders prompts as markdown. `python -m pytest tests/test_queue.py tests/test_sources.py` passes.
+**Acceptance:** `engram build-queue` on a test repo produces correct JSONL including session entries. Claude Code history adapter correctly filters by project, groups by session, renders prompts as markdown. `python -m pytest tests/test_queue.py tests/test_sources.py tests/test_sessions.py` passes.
 
 ---
 
@@ -215,7 +216,7 @@ Rework of v2's `next_chunk()` (lines 721-931) + `_write_agent_prompt()` (lines 9
 **Agent:** Engineer (single ticket)
 
 New code — the core v3 addition:
-- `engram/server/watcher.py`: filesystem events via `watchdog` on configured source dirs. Git polling (`git log --since`) on configurable interval (default 60s) for commit/push detection.
+- `engram/server/watcher.py`: filesystem events via `watchdog` on configured source dirs. Git polling (`git log --since`) on configurable interval (default 60s) for commit/push detection. Session history polling (mtime check on `sessions.path`, e.g., `~/.claude/history.jsonl`) on same interval — new entries filtered by `project_match` and added to buffer.
 - `engram/server/buffer.py`: accumulate changed items into context buffer, compute budget in real-time, trigger dispatch when full or drift threshold hit. Tracks age-based drift metrics (contested claim age, stale unverified age, workflow repetition count) to feed into #8 chunker's priority scheduling.
 - `engram/server/dispatcher.py`: serial dispatch — one chunk at a time. Shell out to fold agent CLI (configurable: `claude`, `codex`, etc.), capture result, run linter, auto-retry with correction prompt on failure (max 2), regenerate L0 briefing after success.
 - `engram/server/db.py`: SQLite state management (`.engram/engram.db`). Four tables: `buffer_items`, `dispatches` (lifecycle: building → dispatched → validated → committed), `id_counters`, `server_state`. Atomic transactions for buffer consumption + dispatch recording. Crash recovery on startup: check `dispatches` for non-terminal rows and resume.
@@ -223,7 +224,7 @@ New code — the core v3 addition:
 
 **Dependencies:** #3 (config), #5 (IDs), #6 (linter), #8 (chunker)
 
-**Acceptance:** Server detects file changes, accumulates buffer, dispatches when full. Linter rejection triggers auto-retry. L0 briefing regenerated after successful dispatch. Crash recovery: kill server mid-dispatch, restart, server resumes correctly. `engram status` shows accurate state from SQLite. Manual test: create a file in watched dir → server dispatches within configured interval.
+**Acceptance:** Server detects file changes, accumulates buffer, dispatches when full. Session history polling detects new prompts and adds them to buffer. Linter rejection triggers auto-retry. L0 briefing regenerated after successful dispatch. Crash recovery: kill server mid-dispatch, restart, server resumes correctly. `engram status` shows accurate state from SQLite. Manual tests: (1) create a file in watched dir → server dispatches within configured interval; (2) add a prompt to history file → prompt appears in next buffer/dispatch.
 
 ---
 
