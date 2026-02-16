@@ -112,13 +112,15 @@ class Dispatcher:
         doc_paths: dict[str, Path],
     ) -> bool:
         """Execute the fold agent and validate results. Retry on lint failure."""
+        correction_text: str | None = None
+
         for attempt in range(1 + MAX_RETRIES):
             if attempt > 0:
                 retry_count = self._db.increment_retry(dispatch_id)
                 log.info("Retry %d/%d for dispatch %d", retry_count, MAX_RETRIES, dispatch_id)
 
-            # Shell out to fold agent
-            ok = self._invoke_fold_agent(chunk)
+            # Shell out to fold agent — on retry, include correction context
+            ok = self._invoke_fold_agent(chunk, correction_text=correction_text)
             if not ok:
                 self._db.update_dispatch_state(
                     dispatch_id, "dispatched", error="Agent invocation failed",
@@ -147,7 +149,7 @@ class Dispatcher:
             if result.passed:
                 return True
 
-            # Lint failed — log violations
+            # Lint failed — log violations and build correction for next attempt
             log.warning(
                 "Lint failed (%d violations) for chunk %d:",
                 len(result.violations), chunk.chunk_id,
@@ -155,9 +157,7 @@ class Dispatcher:
             for v in result.violations:
                 log.warning("  [%s/%s] %s", v.doc_type, v.entry_id or "", v.message)
 
-            if attempt < MAX_RETRIES:
-                # Write correction prompt for retry
-                self._write_correction_prompt(chunk, result)
+            correction_text = _build_correction_text(chunk, result)
 
             self._db.update_dispatch_state(
                 dispatch_id, "dispatched",
@@ -166,8 +166,20 @@ class Dispatcher:
 
         return False
 
-    def _invoke_fold_agent(self, chunk: ChunkResult) -> bool:
+    def _invoke_fold_agent(
+        self,
+        chunk: ChunkResult,
+        correction_text: str | None = None,
+    ) -> bool:
         """Shell out to the configured fold agent CLI.
+
+        Parameters
+        ----------
+        chunk:
+            The chunk being dispatched.
+        correction_text:
+            If provided (on retry), appended to the prompt so the agent
+            sees the lint violations from the previous attempt.
 
         Returns True if the agent completed successfully.
         """
@@ -181,6 +193,8 @@ class Dispatcher:
             cmd = ["claude", "--print", "--model", model]
 
         prompt = chunk.prompt_path.read_text()
+        if correction_text:
+            prompt = prompt + "\n\n" + correction_text
         cmd.append(prompt)
 
         log.info("Invoking fold agent: %s", " ".join(cmd[:3]) + " ...")
@@ -203,23 +217,6 @@ class Dispatcher:
         except FileNotFoundError:
             log.error("Fold agent command not found: %s", cmd[0])
             return False
-
-    def _write_correction_prompt(self, chunk: ChunkResult, result: LintResult) -> None:
-        """Write a correction prompt file for retry."""
-        violations_text = "\n".join(
-            f"- [{v.doc_type}/{v.entry_id or ''}] {v.message}"
-            for v in result.violations
-        )
-        correction = (
-            f"The previous fold attempt for chunk {chunk.chunk_id} had "
-            f"{len(result.violations)} lint violations:\n\n"
-            f"{violations_text}\n\n"
-            f"Please fix these violations in the living docs. "
-            f"Re-read the input file at {chunk.input_path.resolve()} for context.\n"
-        )
-        correction_path = chunk.prompt_path.with_suffix(".correction.txt")
-        correction_path.write_text(correction)
-        log.info("Wrote correction prompt: %s", correction_path)
 
     def _regenerate_l0_briefing(self, doc_paths: dict[str, Path]) -> None:
         """Regenerate the L0 briefing section in the project's CLAUDE.md.
@@ -289,15 +286,24 @@ class Dispatcher:
     def recover_dispatch(self, dispatch: dict[str, Any]) -> bool:
         """Recover a dispatch found in non-terminal state on startup.
 
-        For 'dispatched' state: check if living docs changed (agent may
-        have completed), re-lint if so, otherwise re-dispatch.
+        Recovery strategy per state:
+        - ``validated``: L0 regen didn't complete. Regenerate and mark committed.
+        - ``dispatched``: Agent may have completed. Re-lint; if valid, proceed
+          to L0 regen + committed. If lint fails and retries remain, re-dispatch.
         """
         doc_paths = resolve_doc_paths(self._config, self._project_root)
         dispatch_id = dispatch["id"]
 
+        if dispatch["state"] == "validated":
+            # L0 regen didn't complete — regenerate and mark committed
+            self._regenerate_l0_briefing(doc_paths)
+            self._db.update_dispatch_state(dispatch_id, "committed")
+            log.info("Recovered validated dispatch %d: L0 regen + committed", dispatch_id)
+            return True
+
         if dispatch["state"] == "dispatched":
-            # Check if agent completed by looking for doc changes
             input_path = Path(dispatch["input_path"]) if dispatch["input_path"] else None
+            prompt_path = Path(dispatch["prompt_path"]) if dispatch.get("prompt_path") else None
 
             if input_path and input_path.exists():
                 # Re-read docs and try to validate
@@ -318,20 +324,110 @@ class Dispatcher:
                     log.info("Recovered dispatch %d as committed", dispatch_id)
                     return True
 
-            # Cannot validate — mark as failed
+                # Lint failed — re-dispatch if retries remain
+                if dispatch["retry_count"] < MAX_RETRIES and prompt_path and prompt_path.exists():
+                    log.info(
+                        "Recovery: lint failed for dispatch %d, re-dispatching (retry %d/%d)",
+                        dispatch_id, dispatch["retry_count"] + 1, MAX_RETRIES,
+                    )
+                    retry_count = self._db.increment_retry(dispatch_id)
+
+                    # Build a minimal ChunkResult for re-invocation
+                    correction_text = _build_correction_text_from_lint(result)
+                    ok = self._invoke_fold_agent_from_path(prompt_path, correction_text)
+                    if ok:
+                        # Re-lint after retry
+                        after2 = _read_docs(
+                            doc_paths, ("timeline", "concepts", "epistemic", "workflows"),
+                        )
+                        graveyard2 = _read_docs(
+                            doc_paths, ("concept_graveyard", "epistemic_graveyard"),
+                        )
+                        result2 = lint(after2, graveyard2, self._config)
+                        if result2.passed:
+                            self._db.update_dispatch_state(dispatch_id, "validated")
+                            self._regenerate_l0_briefing(doc_paths)
+                            self._db.update_dispatch_state(dispatch_id, "committed")
+                            log.info("Recovery re-dispatch succeeded for dispatch %d", dispatch_id)
+                            return True
+
+            # Cannot recover — mark committed with error
             self._db.update_dispatch_state(
                 dispatch_id, "committed",
-                error="Recovered: could not validate, marked committed with error",
+                error="Recovered: could not validate after retries",
             )
             log.warning("Recovered dispatch %d with error", dispatch_id)
             return False
 
         return False
 
+    def _invoke_fold_agent_from_path(
+        self,
+        prompt_path: Path,
+        correction_text: str | None = None,
+    ) -> bool:
+        """Re-invoke fold agent using a prompt file path (for recovery)."""
+        model = self._config.get("model", "sonnet")
+        agent_cmd = self._config.get("agent_command")
+        if agent_cmd:
+            cmd = agent_cmd.split()
+        else:
+            cmd = ["claude", "--print", "--model", model]
+
+        prompt = prompt_path.read_text()
+        if correction_text:
+            prompt = prompt + "\n\n" + correction_text
+        cmd.append(prompt)
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                cwd=str(self._project_root),
+                timeout=600,
+            )
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+
 
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
+
+def _build_correction_text_from_lint(result: LintResult) -> str:
+    """Build correction text from a LintResult (for crash recovery)."""
+    violations_text = "\n".join(
+        f"- [{v.doc_type}/{v.entry_id or ''}] {v.message}"
+        for v in result.violations
+    )
+    return (
+        f"CORRECTION REQUIRED: The previous fold attempt had "
+        f"{len(result.violations)} lint violations:\n\n"
+        f"{violations_text}\n\n"
+        f"Please fix these violations in the living docs.\n"
+    )
+
+
+def _build_correction_text(chunk: ChunkResult, result: LintResult) -> str:
+    """Build correction context for a retry prompt.
+
+    Returns text to append to the agent prompt so it sees the lint
+    violations from the previous attempt.
+    """
+    violations_text = "\n".join(
+        f"- [{v.doc_type}/{v.entry_id or ''}] {v.message}"
+        for v in result.violations
+    )
+    return (
+        f"CORRECTION REQUIRED: The previous fold attempt for chunk {chunk.chunk_id} had "
+        f"{len(result.violations)} lint violations:\n\n"
+        f"{violations_text}\n\n"
+        f"Please fix these violations in the living docs. "
+        f"Re-read the input file at {chunk.input_path.resolve()} for context.\n"
+    )
 
 
 def _read_docs(doc_paths: dict[str, Path], keys: tuple[str, ...]) -> dict[str, str]:

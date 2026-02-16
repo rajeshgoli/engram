@@ -90,11 +90,6 @@ class ContextBuffer:
         if budget > 0 and buffer_chars >= budget:
             return "buffer_full"
 
-        # Check if we have any items at all (minimum threshold)
-        items = self._db.get_buffer_items()
-        if not items:
-            return None
-
         return None
 
     def get_items(self) -> list[dict[str, Any]]:

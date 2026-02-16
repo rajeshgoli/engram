@@ -214,15 +214,17 @@ class TestDispatches:
         d1 = db.create_dispatch(chunk_id=1)
         d2 = db.create_dispatch(chunk_id=2)
         d3 = db.create_dispatch(chunk_id=3)
+        d4 = db.create_dispatch(chunk_id=4)
 
         db.update_dispatch_state(d1, "committed")  # terminal
         db.update_dispatch_state(d2, "dispatched")  # non-terminal
+        db.update_dispatch_state(d4, "validated")  # non-terminal (needs L0 regen)
         # d3 stays 'building' — non-terminal
 
         non_terminal = db.get_non_terminal_dispatches()
-        assert len(non_terminal) == 2
+        assert len(non_terminal) == 3
         states = {d["state"] for d in non_terminal}
-        assert states == {"building", "dispatched"}
+        assert states == {"building", "dispatched", "validated"}
 
     def test_recent_dispatches(self, db: ServerDB) -> None:
         for i in range(15):
@@ -288,11 +290,25 @@ class TestCrashRecovery:
         db.update_dispatch_state(d1, "committed")
         assert db.recover_on_startup() == []
 
-    def test_validated_not_returned(self, db: ServerDB) -> None:
+    def test_validated_returned_for_l0_regen(self, db: ServerDB) -> None:
         d1 = db.create_dispatch(chunk_id=1)
         db.update_dispatch_state(d1, "validated")
-        # validated is terminal
+        # validated is NOT terminal — needs L0 regen
+        stale = db.recover_on_startup()
+        assert len(stale) == 1
+        assert stale[0]["state"] == "validated"
+
+    def test_committed_is_terminal(self, db: ServerDB) -> None:
+        d1 = db.create_dispatch(chunk_id=1)
+        db.update_dispatch_state(d1, "committed")
         assert db.recover_on_startup() == []
+
+    def test_validated_non_terminal_in_dispatches(self, db: ServerDB) -> None:
+        d1 = db.create_dispatch(chunk_id=1)
+        db.update_dispatch_state(d1, "validated")
+        non_terminal = db.get_non_terminal_dispatches()
+        assert len(non_terminal) == 1
+        assert non_terminal[0]["state"] == "validated"
 
 
 # ==================================================================
@@ -485,6 +501,42 @@ class TestGitPoller:
             commits = poller.poll()
             assert commits == []
 
+    def test_new_commits_uses_old_bookmark_for_diff(self, tmp_path: Path) -> None:
+        """Verify git diff uses old..new range, not the overwritten bookmark."""
+        from engram.server.watcher import GitPoller
+
+        received: list[str] = []
+
+        def cb(path, typ, chars, date, meta):
+            received.append(path)
+
+        poller = GitPoller(tmp_path, cb)
+        poller.set_last_commit("old_abc")
+
+        call_count = 0
+
+        def mock_run_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            cmd = args[0]
+            if cmd[1] == "rev-parse":
+                return MagicMock(returncode=0, stdout="new_def\n")
+            elif cmd[1] == "log":
+                return MagicMock(returncode=0, stdout="new_def\n")
+            elif cmd[1] == "diff":
+                # Verify the diff range uses old..new
+                diff_range = cmd[3]
+                assert diff_range == "old_abc..new_def", (
+                    f"Expected 'old_abc..new_def', got '{diff_range}'"
+                )
+                return MagicMock(returncode=0, stdout="changed_file.md\n")
+            return MagicMock(returncode=0, stdout="")
+
+        with patch("engram.server.watcher.subprocess.run", side_effect=mock_run_side_effect):
+            commits = poller.poll()
+            assert commits == ["new_def"]
+            assert poller.get_last_commit() == "new_def"
+
 
 # ==================================================================
 # ContextBuffer Tests
@@ -598,6 +650,92 @@ class TestDispatcherHelpers:
         assert "Old briefing." not in text
         assert "## Other" in text
         assert "Other content." in text
+
+    def test_build_correction_text(self) -> None:
+        from engram.server.dispatcher import _build_correction_text
+
+        # Minimal ChunkResult-like object
+        chunk = MagicMock()
+        chunk.chunk_id = 42
+        chunk.input_path.resolve.return_value = "/tmp/chunk.md"
+
+        from engram.linter.schema import Violation
+        from engram.linter import LintResult
+        result = LintResult(
+            passed=False,
+            violations=[
+                Violation(doc_type="concepts", entry_id="C001", message="Missing Code: field"),
+            ],
+        )
+        text = _build_correction_text(chunk, result)
+        assert "CORRECTION REQUIRED" in text
+        assert "chunk 42" in text
+        assert "Missing Code: field" in text
+        assert "[concepts/C001]" in text
+
+    def test_build_correction_text_from_lint(self) -> None:
+        from engram.server.dispatcher import _build_correction_text_from_lint
+
+        from engram.linter.schema import Violation
+        from engram.linter import LintResult
+        result = LintResult(
+            passed=False,
+            violations=[
+                Violation(doc_type="epistemic", entry_id="E005", message="Missing Evidence:"),
+            ],
+        )
+        text = _build_correction_text_from_lint(result)
+        assert "CORRECTION REQUIRED" in text
+        assert "Missing Evidence:" in text
+
+
+class TestDispatcherRecovery:
+    def test_recover_validated_regens_l0(self, project: Path, config: dict) -> None:
+        """Validated dispatch should regen L0 and transition to committed."""
+        from engram.server.dispatcher import Dispatcher
+
+        db = ServerDB(project / ".engram" / "engram.db")
+        dispatcher = Dispatcher(config, project, db)
+
+        # Create a validated dispatch
+        did = db.create_dispatch(chunk_id=1)
+        db.update_dispatch_state(did, "dispatched")
+        db.update_dispatch_state(did, "validated")
+
+        dispatch = db.get_dispatch(did)
+
+        # Mock L0 regen (no real model available)
+        with patch.object(dispatcher, "_regenerate_l0_briefing"):
+            result = dispatcher.recover_dispatch(dispatch)
+
+        assert result is True
+        final = db.get_dispatch(did)
+        assert final["state"] == "committed"
+
+    def test_recover_dispatched_lint_passes(self, project: Path, config: dict) -> None:
+        """Dispatched dispatch with passing lint should commit."""
+        from engram.server.dispatcher import Dispatcher
+
+        db = ServerDB(project / ".engram" / "engram.db")
+        dispatcher = Dispatcher(config, project, db)
+
+        # Create a dispatch with input file
+        chunks_dir = project / ".engram" / "chunks"
+        chunks_dir.mkdir(parents=True)
+        input_path = chunks_dir / "chunk_001_input.md"
+        input_path.write_text("test input")
+
+        did = db.create_dispatch(chunk_id=1, input_path=str(input_path))
+        db.update_dispatch_state(did, "dispatched")
+
+        dispatch = db.get_dispatch(did)
+
+        with patch.object(dispatcher, "_regenerate_l0_briefing"):
+            result = dispatcher.recover_dispatch(dispatch)
+
+        assert result is True
+        final = db.get_dispatch(did)
+        assert final["state"] == "committed"
 
 
 # ==================================================================

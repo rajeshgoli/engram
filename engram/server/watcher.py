@@ -224,12 +224,14 @@ class GitPoller:
             ]
 
             if new_commits:
-                self._last_commit = new_commits[0]  # most recent
+                # Save old bookmark for diff range before updating
+                old_commit = self._last_commit
+                self._last_commit = current_head
 
-                # Get changed files in these commits
+                # Get changed files between old bookmark and current HEAD
                 diff_cmd = [
                     "git", "diff", "--name-only",
-                    f"{self._last_commit}~{len(new_commits)}..{self._last_commit}",
+                    f"{old_commit}..{current_head}",
                 ]
                 diff_result = subprocess.run(
                     diff_cmd,

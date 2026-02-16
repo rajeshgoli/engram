@@ -20,7 +20,7 @@ from typing import Any
 
 # Dispatch lifecycle states
 DISPATCH_STATES = ("building", "dispatched", "validated", "committed")
-TERMINAL_STATES = ("validated", "committed")
+TERMINAL_STATES = ("committed",)
 
 
 class ServerDB:
@@ -310,8 +310,9 @@ class ServerDB:
         """Get all dispatches in non-terminal states (for crash recovery)."""
         conn = self._connect()
         try:
+            placeholders = ",".join("?" for _ in TERMINAL_STATES)
             rows = conn.execute(
-                "SELECT * FROM dispatches WHERE state NOT IN (?, ?) ORDER BY id",
+                f"SELECT * FROM dispatches WHERE state NOT IN ({placeholders}) ORDER BY id",
                 TERMINAL_STATES,
             ).fetchall()
             return [dict(r) for r in rows]
@@ -393,7 +394,8 @@ class ServerDB:
 
         Recovery strategy per state:
         - building: discard (rebuild from buffer)
-        - dispatched: needs re-check or re-dispatch
+        - dispatched: needs re-check or re-dispatch (returned to caller)
+        - validated: L0 regen incomplete (returned to caller)
 
         Returns list of dispatch records needing attention.
         """
@@ -417,8 +419,8 @@ class ServerDB:
         finally:
             conn.close()
 
-        # Return dispatched-state records for the server to handle
-        return [d for d in non_terminal if d["state"] == "dispatched"]
+        # Return dispatched + validated records for the server to handle
+        return [d for d in non_terminal if d["state"] in ("dispatched", "validated")]
 
 
 def _now_iso() -> str:
