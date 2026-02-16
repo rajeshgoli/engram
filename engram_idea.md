@@ -116,14 +116,14 @@ Events (git push, issue filed, PR merged, doc saved)
 4. Shell out to fold agent CLI (`claude`, `codex`, or configured command) with the chunk file
 5. On return: run schema linter
 6. If linter fails: update state → `retry`, re-dispatch with correction prompt (max 2 retries)
-7. If linter passes: update state → `validated`, regenerate L0 briefing (Haiku-class call), update state → `committed`
+7. If linter passes: update state → `validated`, mark L0 stale, update state → `committed`. L0 briefing regenerates when the dispatch queue is fully drained (not per-dispatch).
 
 **Concurrency:** None. Events arriving during a dispatch accumulate in the buffer (SQLite writes are non-blocking). The next dispatch picks them up. This is deliberate — concurrent dispatches would require ID range coordination and merge conflict resolution. Serial processing with pre-assigned IDs is simpler and sufficient for the event rates involved (1-5 dispatches/week).
 
 **Crash recovery:** On startup, the server checks `dispatches` for any row in a non-terminal state:
 - `building` → discard, rebuild from buffer
 - `dispatched` → agent may have completed; check for living doc changes, re-lint if found, otherwise re-dispatch
-- `validated` → L0 regen didn't complete; regenerate and mark `committed`
+- `validated` → mark committed, set L0 stale (deferred to next drain)
 
 No manual intervention needed. The chunk input file is self-contained, so re-dispatch is always safe.
 
@@ -152,7 +152,7 @@ Generalized thresholds:
 
 ```
 L0:   CLAUDE.md briefing (~50-100 lines)
-      Always loaded, every session. Auto-regenerated after each dispatch.
+      Always loaded, every session. Auto-regenerated when dispatch queue drains (not per-dispatch).
       "proximity pruning is dead, 74% WR is phantom,
        1418 tick-level edge is unverified pending broker data"
 

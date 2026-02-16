@@ -25,6 +25,7 @@ from engram.config import load_config, resolve_doc_paths
 from engram.dispatch import invoke_agent
 from engram.fold.ids import IDAllocator
 from engram.fold.prompt import render_seed_prompt
+from engram.server.briefing import regenerate_l0_briefing
 
 log = logging.getLogger(__name__)
 
@@ -301,6 +302,10 @@ def seed(
 
         if not success:
             return False
+
+        # Regenerate L0 briefing after seed succeeds
+        doc_paths = resolve_doc_paths(config, project_root)
+        regenerate_l0_briefing(config, project_root, doc_paths)
 
         # Path A: fold forward after seeding
         if from_date is not None:

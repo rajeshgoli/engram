@@ -690,8 +690,8 @@ class TestDispatcherHelpers:
 
 
 class TestDispatcherRecovery:
-    def test_recover_validated_regens_l0(self, project: Path, config: dict) -> None:
-        """Validated dispatch should regen L0 and transition to committed."""
+    def test_recover_validated_marks_stale(self, project: Path, config: dict) -> None:
+        """Validated dispatch should mark L0 stale and transition to committed."""
         from engram.server.dispatcher import Dispatcher
 
         db = ServerDB(project / ".engram" / "engram.db")
@@ -703,17 +703,15 @@ class TestDispatcherRecovery:
         db.update_dispatch_state(did, "validated")
 
         dispatch = db.get_dispatch(did)
-
-        # Mock L0 regen (no real model available)
-        with patch.object(dispatcher, "_regenerate_l0_briefing"):
-            result = dispatcher.recover_dispatch(dispatch)
+        result = dispatcher.recover_dispatch(dispatch)
 
         assert result is True
+        assert db.is_l0_stale() is True
         final = db.get_dispatch(did)
         assert final["state"] == "committed"
 
     def test_recover_dispatched_lint_passes(self, project: Path, config: dict) -> None:
-        """Dispatched dispatch with passing lint should commit."""
+        """Dispatched dispatch with passing lint should mark stale and commit."""
         from engram.server.dispatcher import Dispatcher
 
         db = ServerDB(project / ".engram" / "engram.db")
@@ -729,11 +727,10 @@ class TestDispatcherRecovery:
         db.update_dispatch_state(did, "dispatched")
 
         dispatch = db.get_dispatch(did)
-
-        with patch.object(dispatcher, "_regenerate_l0_briefing"):
-            result = dispatcher.recover_dispatch(dispatch)
+        result = dispatcher.recover_dispatch(dispatch)
 
         assert result is True
+        assert db.is_l0_stale() is True
         final = db.get_dispatch(did)
         assert final["state"] == "committed"
 
