@@ -1,0 +1,684 @@
+"""Tests for the engram server module."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import time
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from engram.server.db import DISPATCH_STATES, TERMINAL_STATES, ServerDB
+
+
+# ------------------------------------------------------------------
+# Fixtures
+# ------------------------------------------------------------------
+
+
+@pytest.fixture()
+def db_path(tmp_path: Path) -> Path:
+    return tmp_path / ".engram" / "engram.db"
+
+
+@pytest.fixture()
+def db(db_path: Path) -> ServerDB:
+    return ServerDB(db_path)
+
+
+@pytest.fixture()
+def project(tmp_path: Path) -> Path:
+    """Set up a minimal engram project."""
+    engram_dir = tmp_path / ".engram"
+    engram_dir.mkdir()
+
+    config_yaml = """\
+living_docs:
+  timeline: docs/decisions/timeline.md
+  concepts: docs/decisions/concept_registry.md
+  epistemic: docs/decisions/epistemic_state.md
+  workflows: docs/decisions/workflow_registry.md
+graveyard:
+  concepts: docs/decisions/concept_graveyard.md
+  epistemic: docs/decisions/epistemic_graveyard.md
+thresholds:
+  orphan_triage: 50
+  contested_review_days: 14
+  stale_unverified_days: 30
+  workflow_repetition: 3
+budget:
+  context_limit_chars: 600000
+  instructions_overhead: 10000
+  max_chunk_chars: 200000
+"""
+    (engram_dir / "config.yaml").write_text(config_yaml)
+
+    docs_dir = tmp_path / "docs" / "decisions"
+    docs_dir.mkdir(parents=True)
+    (docs_dir / "timeline.md").write_text("# Timeline\n")
+    (docs_dir / "concept_registry.md").write_text("# Concept Registry\n")
+    (docs_dir / "epistemic_state.md").write_text("# Epistemic State\n")
+    (docs_dir / "workflow_registry.md").write_text("# Workflow Registry\n")
+    (docs_dir / "concept_graveyard.md").write_text("# Concept Graveyard\n")
+    (docs_dir / "epistemic_graveyard.md").write_text("# Epistemic Graveyard\n")
+
+    # Create source dirs
+    working_dir = tmp_path / "docs" / "working"
+    working_dir.mkdir(parents=True, exist_ok=True)
+
+    return tmp_path
+
+
+@pytest.fixture()
+def config(project: Path) -> dict:
+    from engram.config import load_config
+    return load_config(project)
+
+
+# ==================================================================
+# ServerDB Tests
+# ==================================================================
+
+
+class TestServerDBInit:
+    def test_creates_tables(self, db_path: Path) -> None:
+        db = ServerDB(db_path)
+        conn = sqlite3.connect(str(db_path))
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        conn.close()
+        assert "buffer_items" in tables
+        assert "dispatches" in tables
+        assert "server_state" in tables
+
+    def test_server_state_singleton(self, db: ServerDB) -> None:
+        state = db.get_server_state()
+        assert state["buffer_chars_total"] == 0
+
+    def test_reinit_preserves_data(self, db_path: Path) -> None:
+        db1 = ServerDB(db_path)
+        db1.add_buffer_item("test.md", "doc", 100)
+        # Re-init — data should persist
+        db2 = ServerDB(db_path)
+        items = db2.get_buffer_items()
+        assert len(items) == 1
+
+    def test_does_not_touch_id_counters(self, db_path: Path) -> None:
+        """Verify db.py does not create id_counters table."""
+        db = ServerDB(db_path)
+        conn = sqlite3.connect(str(db_path))
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        conn.close()
+        assert "id_counters" not in tables
+
+
+class TestBufferItems:
+    def test_add_and_get(self, db: ServerDB) -> None:
+        row_id = db.add_buffer_item("docs/spec.md", "doc", 500, "2025-01-15")
+        assert row_id > 0
+
+        items = db.get_buffer_items()
+        assert len(items) == 1
+        assert items[0]["path"] == "docs/spec.md"
+        assert items[0]["item_type"] == "doc"
+        assert items[0]["chars"] == 500
+
+    def test_buffer_chars_tracked(self, db: ServerDB) -> None:
+        db.add_buffer_item("a.md", "doc", 100)
+        db.add_buffer_item("b.md", "doc", 200)
+        assert db.get_buffer_chars() == 300
+
+    def test_clear_buffer(self, db: ServerDB) -> None:
+        db.add_buffer_item("a.md", "doc", 100)
+        db.add_buffer_item("b.md", "doc", 200)
+        count = db.clear_buffer()
+        assert count == 2
+        assert db.get_buffer_items() == []
+        assert db.get_buffer_chars() == 0
+
+    def test_consume_buffer(self, db: ServerDB) -> None:
+        id1 = db.add_buffer_item("a.md", "doc", 100)
+        id2 = db.add_buffer_item("b.md", "doc", 200)
+        id3 = db.add_buffer_item("c.md", "doc", 300)
+
+        consumed = db.consume_buffer([id1, id3])
+        assert len(consumed) == 2
+        assert {c["path"] for c in consumed} == {"a.md", "c.md"}
+        assert db.get_buffer_chars() == 200
+
+        remaining = db.get_buffer_items()
+        assert len(remaining) == 1
+        assert remaining[0]["path"] == "b.md"
+
+    def test_consume_empty_list(self, db: ServerDB) -> None:
+        assert db.consume_buffer([]) == []
+
+    def test_has_buffer_item(self, db: ServerDB) -> None:
+        assert not db.has_buffer_item("test.md")
+        db.add_buffer_item("test.md", "doc", 50)
+        assert db.has_buffer_item("test.md")
+
+    def test_items_ordered_by_date(self, db: ServerDB) -> None:
+        db.add_buffer_item("c.md", "doc", 100, "2025-03-01")
+        db.add_buffer_item("a.md", "doc", 100, "2025-01-01")
+        db.add_buffer_item("b.md", "doc", 100, "2025-02-01")
+        items = db.get_buffer_items()
+        assert [i["path"] for i in items] == ["a.md", "b.md", "c.md"]
+
+
+class TestDispatches:
+    def test_create_dispatch(self, db: ServerDB) -> None:
+        did = db.create_dispatch(chunk_id=1, input_path="/tmp/chunk.md")
+        d = db.get_dispatch(did)
+        assert d is not None
+        assert d["chunk_id"] == 1
+        assert d["state"] == "building"
+        assert d["retry_count"] == 0
+
+    def test_update_dispatch_state(self, db: ServerDB) -> None:
+        did = db.create_dispatch(chunk_id=1)
+        db.update_dispatch_state(did, "dispatched")
+        d = db.get_dispatch(did)
+        assert d["state"] == "dispatched"
+
+    def test_update_dispatch_invalid_state(self, db: ServerDB) -> None:
+        did = db.create_dispatch(chunk_id=1)
+        with pytest.raises(ValueError, match="Invalid dispatch state"):
+            db.update_dispatch_state(did, "invalid")
+
+    def test_increment_retry(self, db: ServerDB) -> None:
+        did = db.create_dispatch(chunk_id=1)
+        assert db.increment_retry(did) == 1
+        assert db.increment_retry(did) == 2
+        d = db.get_dispatch(did)
+        assert d["retry_count"] == 2
+
+    def test_dispatch_with_error(self, db: ServerDB) -> None:
+        did = db.create_dispatch(chunk_id=1)
+        db.update_dispatch_state(did, "dispatched", error="Lint failed")
+        d = db.get_dispatch(did)
+        assert d["error"] == "Lint failed"
+
+    def test_non_terminal_dispatches(self, db: ServerDB) -> None:
+        d1 = db.create_dispatch(chunk_id=1)
+        d2 = db.create_dispatch(chunk_id=2)
+        d3 = db.create_dispatch(chunk_id=3)
+
+        db.update_dispatch_state(d1, "committed")  # terminal
+        db.update_dispatch_state(d2, "dispatched")  # non-terminal
+        # d3 stays 'building' — non-terminal
+
+        non_terminal = db.get_non_terminal_dispatches()
+        assert len(non_terminal) == 2
+        states = {d["state"] for d in non_terminal}
+        assert states == {"building", "dispatched"}
+
+    def test_recent_dispatches(self, db: ServerDB) -> None:
+        for i in range(15):
+            db.create_dispatch(chunk_id=i + 1)
+        recent = db.get_recent_dispatches(limit=5)
+        assert len(recent) == 5
+        # Most recent first
+        assert recent[0]["chunk_id"] == 15
+
+    def test_last_dispatch(self, db: ServerDB) -> None:
+        db.create_dispatch(chunk_id=1)
+        db.create_dispatch(chunk_id=2)
+        last = db.get_last_dispatch()
+        assert last is not None
+        assert last["chunk_id"] == 2
+
+    def test_no_dispatches(self, db: ServerDB) -> None:
+        assert db.get_last_dispatch() is None
+        assert db.get_non_terminal_dispatches() == []
+
+
+class TestServerState:
+    def test_update_and_get(self, db: ServerDB) -> None:
+        db.update_server_state(
+            last_poll_commit="abc123",
+            last_poll_time="2025-01-15T12:00:00Z",
+        )
+        state = db.get_server_state()
+        assert state["last_poll_commit"] == "abc123"
+        assert state["last_poll_time"] == "2025-01-15T12:00:00Z"
+
+    def test_invalid_key_raises(self, db: ServerDB) -> None:
+        with pytest.raises(ValueError, match="Invalid server_state keys"):
+            db.update_server_state(bogus="value")
+
+    def test_update_buffer_chars(self, db: ServerDB) -> None:
+        db.update_server_state(buffer_chars_total=42)
+        state = db.get_server_state()
+        assert state["buffer_chars_total"] == 42
+
+    def test_session_mtime(self, db: ServerDB) -> None:
+        db.update_server_state(last_session_mtime=1234567890.5)
+        state = db.get_server_state()
+        assert state["last_session_mtime"] == 1234567890.5
+
+
+class TestCrashRecovery:
+    def test_building_dispatches_discarded(self, db: ServerDB) -> None:
+        d1 = db.create_dispatch(chunk_id=1)  # building
+        d2 = db.create_dispatch(chunk_id=2)
+        db.update_dispatch_state(d2, "dispatched")
+
+        stale = db.recover_on_startup()
+        # building records deleted, only dispatched returned
+        assert len(stale) == 1
+        assert stale[0]["state"] == "dispatched"
+
+        # building record should be gone
+        assert db.get_dispatch(d1) is None
+
+    def test_no_stale_dispatches(self, db: ServerDB) -> None:
+        d1 = db.create_dispatch(chunk_id=1)
+        db.update_dispatch_state(d1, "committed")
+        assert db.recover_on_startup() == []
+
+    def test_validated_not_returned(self, db: ServerDB) -> None:
+        d1 = db.create_dispatch(chunk_id=1)
+        db.update_dispatch_state(d1, "validated")
+        # validated is terminal
+        assert db.recover_on_startup() == []
+
+
+# ==================================================================
+# Watcher Tests
+# ==================================================================
+
+
+class TestFileWatcher:
+    def test_handler_filters_extensions(self, project: Path) -> None:
+        from engram.server.watcher import _DocEventHandler
+
+        received: list[tuple] = []
+
+        def cb(path, typ, chars, date, meta):
+            received.append((path, typ))
+
+        handler = _DocEventHandler(cb, project)
+
+        # Simulate events
+        from watchdog.events import FileCreatedEvent
+        (project / "docs" / "working" / "spec.md").write_text("content")
+        handler.on_created(
+            FileCreatedEvent(str(project / "docs" / "working" / "spec.md"))
+        )
+        assert len(received) == 1
+        assert received[0][0] == "docs/working/spec.md"
+
+    def test_handler_skips_hidden_files(self, project: Path) -> None:
+        from engram.server.watcher import _DocEventHandler
+
+        received: list[tuple] = []
+
+        def cb(path, typ, chars, date, meta):
+            received.append((path, typ))
+
+        handler = _DocEventHandler(cb, project)
+
+        from watchdog.events import FileCreatedEvent
+        engram_file = project / ".engram" / "config.yaml"
+        handler.on_created(FileCreatedEvent(str(engram_file)))
+        assert len(received) == 0
+
+    def test_handler_skips_non_doc_extensions(self, project: Path) -> None:
+        from engram.server.watcher import _DocEventHandler
+
+        received: list[tuple] = []
+
+        def cb(path, typ, chars, date, meta):
+            received.append((path, typ))
+
+        handler = _DocEventHandler(cb, project)
+
+        from watchdog.events import FileCreatedEvent
+        py_file = project / "docs" / "working" / "script.py"
+        py_file.parent.mkdir(parents=True, exist_ok=True)
+        py_file.write_text("print('hi')")
+        handler.on_created(FileCreatedEvent(str(py_file)))
+        assert len(received) == 0
+
+    def test_handler_detects_json_as_issue(self, project: Path) -> None:
+        from engram.server.watcher import _DocEventHandler
+
+        received: list[tuple] = []
+
+        def cb(path, typ, chars, date, meta):
+            received.append((path, typ))
+
+        handler = _DocEventHandler(cb, project)
+
+        from watchdog.events import FileCreatedEvent
+        issues_dir = project / "local_data" / "issues"
+        issues_dir.mkdir(parents=True)
+        issue_file = issues_dir / "42.json"
+        issue_file.write_text("{}")
+        handler.on_created(FileCreatedEvent(str(issue_file)))
+        assert len(received) == 1
+        assert received[0][1] == "issue"
+
+
+class TestSessionPoller:
+    def test_poll_detects_new_sessions(self, tmp_path: Path) -> None:
+        from engram.server.watcher import SessionPoller
+
+        history = tmp_path / "history.jsonl"
+        entry = {
+            "sessionId": "sess1",
+            "project": "/path/to/my-project",
+            "display": "This is a long enough prompt for testing purposes",
+            "timestamp": int(time.time() * 1000),
+        }
+        history.write_text(json.dumps(entry) + "\n")
+
+        config = {
+            "sources": {
+                "sessions": {
+                    "format": "claude-code",
+                    "path": str(history),
+                    "project_match": ["my-project"],
+                }
+            }
+        }
+
+        received: list[tuple] = []
+
+        def cb(path, typ, chars, date, meta):
+            received.append((path, typ, chars))
+
+        poller = SessionPoller(config, cb)
+        count = poller.poll()
+        assert count == 1
+        assert len(received) == 1
+        assert received[0][1] == "prompts"
+
+    def test_poll_no_change(self, tmp_path: Path) -> None:
+        from engram.server.watcher import SessionPoller
+
+        history = tmp_path / "history.jsonl"
+        history.write_text("")
+
+        config = {
+            "sources": {
+                "sessions": {
+                    "format": "claude-code",
+                    "path": str(history),
+                    "project_match": [],
+                }
+            }
+        }
+
+        def cb(*args):
+            pass
+
+        poller = SessionPoller(config, cb)
+        poller.poll()  # first poll establishes mtime
+        assert poller.poll() == 0  # no change
+
+    def test_poll_missing_file(self, tmp_path: Path) -> None:
+        from engram.server.watcher import SessionPoller
+
+        config = {
+            "sources": {
+                "sessions": {
+                    "format": "claude-code",
+                    "path": str(tmp_path / "nonexistent.jsonl"),
+                    "project_match": [],
+                }
+            }
+        }
+
+        def cb(*args):
+            pass
+
+        poller = SessionPoller(config, cb)
+        assert poller.poll() == 0
+
+
+class TestGitPoller:
+    def test_first_poll_records_head(self, tmp_path: Path) -> None:
+        from engram.server.watcher import GitPoller
+
+        received: list[tuple] = []
+
+        def cb(path, typ, chars, date, meta):
+            received.append(path)
+
+        poller = GitPoller(tmp_path, cb)
+
+        # Mock subprocess to return a commit hash
+        with patch("engram.server.watcher.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout="abc123\n"
+            )
+            commits = poller.poll()
+            assert commits == []  # first poll just records HEAD
+            assert poller.get_last_commit() == "abc123"
+
+    def test_no_new_commits(self, tmp_path: Path) -> None:
+        from engram.server.watcher import GitPoller
+
+        def cb(*args):
+            pass
+
+        poller = GitPoller(tmp_path, cb)
+        poller.set_last_commit("abc123")
+
+        with patch("engram.server.watcher.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout="abc123\n"
+            )
+            commits = poller.poll()
+            assert commits == []
+
+
+# ==================================================================
+# ContextBuffer Tests
+# ==================================================================
+
+
+class TestContextBuffer:
+    def test_add_item(self, project: Path, config: dict) -> None:
+        from engram.server.buffer import ContextBuffer
+
+        db = ServerDB(project / ".engram" / "engram.db")
+        buffer = ContextBuffer(config, project, db)
+
+        assert buffer.add_item("docs/spec.md", "doc", 100) is True
+        items = buffer.get_items()
+        assert len(items) == 1
+
+    def test_duplicate_rejected(self, project: Path, config: dict) -> None:
+        from engram.server.buffer import ContextBuffer
+
+        db = ServerDB(project / ".engram" / "engram.db")
+        buffer = ContextBuffer(config, project, db)
+
+        assert buffer.add_item("docs/spec.md", "doc", 100) is True
+        assert buffer.add_item("docs/spec.md", "doc", 100) is False
+        assert len(buffer.get_items()) == 1
+
+    def test_should_dispatch_empty_buffer(self, project: Path, config: dict) -> None:
+        from engram.server.buffer import ContextBuffer
+
+        db = ServerDB(project / ".engram" / "engram.db")
+        buffer = ContextBuffer(config, project, db)
+        assert buffer.should_dispatch() is None
+
+    def test_should_dispatch_buffer_full(self, project: Path, config: dict) -> None:
+        from engram.server.buffer import ContextBuffer
+
+        # Set max_chunk_chars very low to trigger
+        config["budget"]["max_chunk_chars"] = 100
+        db = ServerDB(project / ".engram" / "engram.db")
+        buffer = ContextBuffer(config, project, db)
+
+        buffer.add_item("docs/spec.md", "doc", 200)
+        reason = buffer.should_dispatch()
+        assert reason == "buffer_full"
+
+    def test_fill_info(self, project: Path, config: dict) -> None:
+        from engram.server.buffer import ContextBuffer
+
+        db = ServerDB(project / ".engram" / "engram.db")
+        buffer = ContextBuffer(config, project, db)
+        buffer.add_item("docs/spec.md", "doc", 1000)
+
+        info = buffer.get_fill_info()
+        assert info["item_count"] == 1
+        assert info["buffer_chars"] == 1000
+        assert info["budget"] > 0
+        assert info["fill_pct"] >= 0
+
+    def test_consume_all(self, project: Path, config: dict) -> None:
+        from engram.server.buffer import ContextBuffer
+
+        db = ServerDB(project / ".engram" / "engram.db")
+        buffer = ContextBuffer(config, project, db)
+
+        buffer.add_item("a.md", "doc", 100)
+        buffer.add_item("b.md", "doc", 200)
+        consumed = buffer.consume_all()
+        assert len(consumed) == 2
+        assert len(buffer.get_items()) == 0
+
+
+# ==================================================================
+# Dispatcher Tests
+# ==================================================================
+
+
+class TestDispatcherHelpers:
+    def test_read_docs(self, project: Path, config: dict) -> None:
+        from engram.config import resolve_doc_paths
+        from engram.server.dispatcher import _read_docs
+
+        doc_paths = resolve_doc_paths(config, project)
+        contents = _read_docs(doc_paths, ("timeline", "concepts"))
+        assert "# Timeline" in contents["timeline"]
+        assert "# Concept Registry" in contents["concepts"]
+
+    def test_inject_section_new(self, tmp_path: Path) -> None:
+        from engram.server.dispatcher import _inject_section
+
+        f = tmp_path / "test.md"
+        f.write_text("# Existing\nContent here.\n")
+
+        _inject_section(f, "## New Section", "New content here.")
+        text = f.read_text()
+        assert "## New Section" in text
+        assert "New content here." in text
+        assert "# Existing" in text
+
+    def test_inject_section_replace(self, tmp_path: Path) -> None:
+        from engram.server.dispatcher import _inject_section
+
+        f = tmp_path / "test.md"
+        f.write_text(
+            "# Main\n\n## Knowledge\n\nOld briefing.\n\n## Other\n\nOther content.\n"
+        )
+
+        _inject_section(f, "## Knowledge", "Updated briefing.")
+        text = f.read_text()
+        assert "Updated briefing." in text
+        assert "Old briefing." not in text
+        assert "## Other" in text
+        assert "Other content." in text
+
+
+# ==================================================================
+# Server Status Tests
+# ==================================================================
+
+
+class TestGetStatus:
+    def test_no_db(self, project: Path, config: dict) -> None:
+        from engram.server import get_status
+
+        # Remove the db file if it exists
+        db_file = project / ".engram" / "engram.db"
+        if db_file.exists():
+            db_file.unlink()
+
+        info = get_status(config, project)
+        assert "error" in info
+
+    def test_with_db(self, project: Path, config: dict) -> None:
+        from engram.server import get_status
+
+        # Create db by instantiating ServerDB
+        ServerDB(project / ".engram" / "engram.db")
+
+        info = get_status(config, project)
+        assert "buffer" in info
+        assert info["buffer"]["item_count"] == 0
+        assert info["pending_items"] == 0
+        assert info["last_dispatch"] is None
+
+
+# ==================================================================
+# CLI Tests
+# ==================================================================
+
+
+class TestCLIStatus:
+    def test_status_no_db(self, project: Path) -> None:
+        from click.testing import CliRunner
+        from engram.cli import cli
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["status", "--project-root", str(project)])
+        # Should show error about no database
+        assert result.exit_code == 1 or "Error" in result.output or "No database" in result.output
+
+    def test_status_with_db(self, project: Path) -> None:
+        from click.testing import CliRunner
+        from engram.cli import cli
+
+        # Create DB
+        ServerDB(project / ".engram" / "engram.db")
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["status", "--project-root", str(project)])
+        assert result.exit_code == 0
+        assert "Buffer:" in result.output
+        assert "Pending items:" in result.output
+
+
+class TestCLIRun:
+    def test_run_registered(self) -> None:
+        """Verify 'run' command is registered in CLI group."""
+        from engram.cli import cli
+        assert "run" in [c.name for c in cli.commands.values()]
+
+    def test_status_registered(self) -> None:
+        """Verify 'status' command is registered in CLI group."""
+        from engram.cli import cli
+        assert "status" in [c.name for c in cli.commands.values()]
+
+
+# ==================================================================
+# Context Manager Tests
+# ==================================================================
+
+
+class TestContextManager:
+    def test_db_context_manager(self, db_path: Path) -> None:
+        with ServerDB(db_path) as db:
+            db.add_buffer_item("test.md", "doc", 100)
+            items = db.get_buffer_items()
+            assert len(items) == 1

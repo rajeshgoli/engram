@@ -287,3 +287,91 @@ def migrate(project_root: str, fold_from: object) -> None:
             click.echo(f"  [{loc}] {v.message}")
         click.echo("Migration complete with validation warnings.")
         raise SystemExit(1)
+
+
+@cli.command()
+@click.option(
+    "--project-root",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    default=".",
+    help="Project root directory (default: cwd).",
+)
+def run(project_root: str) -> None:
+    """Run the engram knowledge server (foreground)."""
+    import logging
+
+    from engram.config import load_config
+    from engram.server import run_server
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    root = Path(project_root)
+    config = load_config(root)
+    click.echo(f"Starting engram server for {root}...")
+    run_server(config, root)
+
+
+@cli.command()
+@click.option(
+    "--project-root",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    default=".",
+    help="Project root directory (default: cwd).",
+)
+def status(project_root: str) -> None:
+    """Show engram server status."""
+    from engram.config import load_config
+    from engram.server import get_status
+
+    root = Path(project_root)
+    config = load_config(root)
+    info = get_status(config, root)
+
+    if "error" in info:
+        click.echo(f"Error: {info['error']}")
+        raise SystemExit(1)
+
+    # Buffer
+    buf = info["buffer"]
+    click.echo("Buffer:")
+    click.echo(f"  Items: {buf['item_count']}")
+    click.echo(f"  Chars: {buf['buffer_chars']:,} / {buf['budget']:,} ({buf['fill_pct']:.1f}%)")
+    click.echo(f"  Living docs: {buf['living_docs_chars']:,} chars")
+
+    # Pending items
+    click.echo(f"\nPending items: {info['pending_items']}")
+
+    # Last dispatch
+    last = info.get("last_dispatch")
+    if last:
+        click.echo(f"\nLast dispatch:")
+        click.echo(f"  Chunk: {last['chunk_id']}")
+        click.echo(f"  State: {last['state']}")
+        click.echo(f"  Retries: {last['retry_count']}")
+        click.echo(f"  Time: {last['updated_at']}")
+        if last.get("error"):
+            click.echo(f"  Error: {last['error']}")
+    else:
+        click.echo("\nNo dispatches yet.")
+
+    # Recent dispatch history
+    recent = info.get("recent_dispatches", [])
+    if recent:
+        click.echo(f"\nRecent dispatches ({len(recent)}):")
+        for d in recent:
+            err = f" [{d['error'][:40]}...]" if d.get("error") else ""
+            click.echo(
+                f"  #{d['chunk_id']} {d['state']} "
+                f"(retries={d['retry_count']}) {d['updated_at']}{err}"
+            )
+
+    # Server state
+    state = info.get("server_state", {})
+    if state.get("last_poll_time"):
+        click.echo(f"\nLast poll: {state['last_poll_time']}")
+    if state.get("last_dispatch_time"):
+        click.echo(f"Last dispatch: {state['last_dispatch_time']}")
