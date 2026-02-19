@@ -328,12 +328,10 @@ class TestGraveyardBootstrapping:
 """
         result, _ = compact_living_doc(content, "concepts", gy_path)
 
-        # Living doc should have stub
+        # Living doc should have no entry for proximity_pruning (removed entirely)
         sections = parse_sections(result)
         dead_sec = [s for s in sections if "proximity_pruning" in s["heading"]]
-        assert len(dead_sec) == 1
-        assert is_stub(dead_sec[0]["heading"])
-        assert "\u2192" in dead_sec[0]["heading"]
+        assert len(dead_sec) == 0
 
         # Graveyard should have full entry
         gy_content = gy_path.read_text()
@@ -373,10 +371,11 @@ class TestGraveyardBootstrapping:
         result, _ = compact_living_doc(content, "epistemic", gy_path)
 
         sections = parse_sections(result)
+        # Refuted entry removed entirely
         refuted = [s for s in sections if "74_percent" in s["heading"]]
-        assert len(refuted) == 1
-        assert is_stub(refuted[0]["heading"])
+        assert len(refuted) == 0
 
+        # Unverified entry preserved
         unverified = [s for s in sections if "tick_level" in s["heading"]]
         assert len(unverified) == 1
         assert not is_stub(unverified[0]["heading"])
@@ -515,9 +514,9 @@ class TestMigrate:
         concepts = (project / "docs" / "concept_registry.md").read_text()
         sections = parse_sections(concepts)
 
+        # Dead entry removed entirely from living doc
         dead = [s for s in sections if "proximity_pruning" in s["heading"]]
-        assert len(dead) == 1
-        assert is_stub(dead[0]["heading"])
+        assert len(dead) == 0
 
     def test_active_entries_preserved(self, tmp_path):
         project = _create_project(tmp_path)

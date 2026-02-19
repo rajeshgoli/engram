@@ -254,17 +254,13 @@ class TestCompactLivingDoc:
         new_content, chars_saved = compact_living_doc(content, "concepts", gy_path)
 
         assert chars_saved > 0
-        # STUB replaces the dead entry
-        assert "C042" in new_content
-        assert "\u2192 concept_graveyard.md#C042" in new_content
+        # Dead entry removed entirely — no stub, no content
+        assert "C042" not in new_content
+        assert "No longer needed" not in new_content
         # Active entries preserved
         assert "src/active.py" in new_content
         assert "src/another.py" in new_content
-        # Blank line separator preserved between STUB and next section
-        assert "\n\n## C050:" in new_content
-        # Dead entry's full content NOT in living doc
-        assert "No longer needed" not in new_content
-        # But IS in graveyard
+        # Full content IS in graveyard
         gy_content = gy_path.read_text()
         assert "No longer needed" in gy_content
 
@@ -281,9 +277,10 @@ class TestCompactLivingDoc:
 
         new_content, chars_saved = compact_living_doc(content, "concepts", gy_path)
 
-        assert chars_saved == 0
-        assert "C001" in new_content
-        # Graveyard not written to
+        # Existing stub removed entirely — chars saved
+        assert chars_saved > 0
+        assert "C001" not in new_content
+        # Graveyard not written to (stub was already there, no new append)
         assert not gy_path.exists()
 
     def test_compacts_epistemic_refuted(self, tmp_path: Path):
@@ -302,9 +299,11 @@ class TestCompactLivingDoc:
         new_content, chars_saved = compact_living_doc(content, "epistemic", gy_path)
 
         assert chars_saved > 0
-        assert "\u2192 epistemic_graveyard.md#E007" in new_content
-        assert "Strong evidence" in new_content
+        # Refuted entry removed entirely — no stub
+        assert "E007" not in new_content
         assert "Backtesting showed otherwise" not in new_content
+        # Believed entry preserved
+        assert "Strong evidence" in new_content
 
     def test_no_eligible_entries(self, tmp_path: Path):
         gy_path = tmp_path / "concept_graveyard.md"
