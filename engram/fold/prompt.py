@@ -74,6 +74,7 @@ def render_triage_input(
     doc_paths: dict[str, Path],
     ref_commit: str | None = None,
     ref_date: str | None = None,
+    project_root: Path | None = None,
 ) -> str:
     """Render a drift-triage chunk's input.md file.
 
@@ -95,6 +96,12 @@ def render_triage_input(
     else:
         entries = []
 
+    lint_cmd = (
+        f'engram lint --project-root "{project_root.resolve()}"'
+        if project_root
+        else "engram lint --project-root <project_root>"
+    )
+
     return template.render(
         drift_type=drift_type,
         entries=entries,
@@ -103,6 +110,7 @@ def render_triage_input(
         entry_count=len(entries),
         ref_commit=ref_commit,
         ref_date=ref_date,
+        lint_cmd=lint_cmd,
     )
 
 
@@ -112,6 +120,7 @@ def render_agent_prompt(
     date_range: str,
     input_path: Path,
     doc_paths: dict[str, Path],
+    project_root: Path | None = None,
 ) -> str:
     """Render the chunk_NNN_prompt.txt agent execution prompt.
 
@@ -125,6 +134,12 @@ def render_agent_prompt(
         f"- {doc_paths['concept_graveyard']}",
         f"- {doc_paths['epistemic_graveyard']}",
     ])
+
+    lint_cmd = (
+        f'engram lint --project-root "{project_root.resolve()}"'
+        if project_root
+        else "engram lint --project-root <project_root>"
+    )
 
     return (
         f"You are processing a knowledge fold chunk.\n"
@@ -153,6 +168,13 @@ def render_agent_prompt(
         f"- DEAD/refuted entries: 1-2 sentences max. Key lesson + what replaced it.\n"
         f"- Process ALL items in the chunk\n"
         f"- Use ONLY pre-assigned IDs for new entries (listed in the input file)\n"
+        f"\n"
+        f"After All Edits: Lint Check (Required)\n"
+        f"\n"
+        f"Run the linter after completing all edits:\n"
+        f"  {lint_cmd}\n"
+        f"Fix every violation reported. Re-run until lint passes with 0 violations.\n"
+        f"Do not stop until lint is clean.\n"
     )
 
 

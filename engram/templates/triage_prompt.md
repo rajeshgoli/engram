@@ -29,8 +29,10 @@ is never a valid reason to skip triage. For each one:
 - Mark **DEAD** if the concept was abandoned/replaced.
   Use 1-2 sentences: what replaced it + key lesson.
   Move the full entry to {{ doc_paths.concept_graveyard }}, replace with STUB.
-- Mark **EVOLVED → new_name** if it was renamed/restructured.
-  Update the Code: field to point to the new location.
+- Mark **EVOLVED** if it was renamed/restructured.
+  Change the heading to: `## C{NNN}: name (EVOLVED) → new_name` (arrow OUTSIDE parens).
+  Update the Code: field to point to the new location. Keep the body in place.
+  Do NOT move EVOLVED entries to the graveyard — graveyard is for DEAD only.
   (Common renames: .ts→.tsx, ground_truth_annotator/→replay_server/)
 - Leave ACTIVE only if the files are genuinely expected to be created later.
 
@@ -120,3 +122,12 @@ For each cluster of related workflows:
 - Be succinct. DEAD/refuted entries: 1-2 sentences max.
 - When moving entries to graveyard, append the full content there, then replace
   the living doc entry with a STUB (heading + arrow pointer only).
+
+## After All Edits: Lint Check (Required)
+
+Run the linter after completing all edits:
+```
+{{ lint_cmd }}
+```
+Fix every violation reported. Re-run until lint passes with 0 violations.
+Do not stop until lint is clean.
