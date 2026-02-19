@@ -562,6 +562,30 @@ class TestNextChunk:
         assert "Orphan Triage Round" in input_text
         assert "orphan_0" in input_text
 
+    def test_workflow_synthesis_not_repeated_for_same_ids(self, project, config):
+        """workflow_synthesis should not re-fire for IDs already in a prior synthesis chunk."""
+        workflows = project / "docs" / "decisions" / "workflow_registry.md"
+        workflows.write_text(
+            "# Workflow Registry\n\n"
+            "## W001: deploy_process (CURRENT)\n- **Context:** Deploy.\n\n"
+            "## W002: review_process (CURRENT)\n- **Context:** Review.\n\n"
+            "## W003: test_process (CURRENT)\n- **Context:** Test.\n\n"
+            "## W004: release_process (CURRENT)\n- **Context:** Release.\n\n"
+        )
+        _write_queue(project, [_make_doc_item(chars=100)])
+
+        # First call: synthesis fires
+        r1 = next_chunk(config, project)
+        assert r1.chunk_type == "workflow_synthesis"
+        assert r1.drift_entry_count == 4
+
+        # Simulate: agent kept all workflows CURRENT (no changes to registry).
+        # Second call: should NOT re-fire synthesis for the same IDs.
+        r2 = next_chunk(config, project)
+        assert r2.chunk_type == "fold", (
+            f"Expected fold chunk after synthesis already ran, got {r2.chunk_type}"
+        )
+
     def test_queue_not_found_raises(self, project, config):
         with pytest.raises(FileNotFoundError, match="No queue found"):
             next_chunk(config, project)

@@ -254,6 +254,28 @@ def _find_claims_by_status(
     return results
 
 
+def _read_synthesized_workflow_ids(manifest_file: Path) -> set[str]:
+    """Return workflow IDs already covered in a previous synthesis chunk.
+
+    Reads ``chunks_manifest.yaml`` and collects every workflow ID recorded
+    under a ``workflow_synthesis`` entry.  These are excluded from the next
+    synthesis trigger so the fold doesn't loop infinitely when an agent
+    decides to keep all workflows as CURRENT.
+    """
+    if not manifest_file.exists():
+        return set()
+    import yaml  # local import — yaml is a standard engram dependency
+
+    with open(manifest_file) as fh:
+        manifest = yaml.safe_load(fh) or []
+    synthesized: set[str] = set()
+    for entry in manifest:
+        if entry.get("type") == "workflow_synthesis":
+            for wid in entry.get("workflow_ids", []):
+                synthesized.add(wid)
+    return synthesized
+
+
 def _find_workflow_repetitions(workflows_path: Path) -> list[dict]:
     """Find CURRENT workflow entries as candidates for synthesis.
 
@@ -438,6 +460,16 @@ def next_chunk(
 
     # Check drift priorities
     drift = scan_drift(config, project_root, fold_from=fold_from)
+
+    # Exclude workflow IDs already covered in a previous synthesis chunk so
+    # the fold doesn't loop when an agent keeps all workflows CURRENT.
+    synthesized_ids = _read_synthesized_workflow_ids(manifest_file)
+    if synthesized_ids:
+        drift.workflow_repetitions = [
+            w for w in drift.workflow_repetitions
+            if w.get("id") not in synthesized_ids
+        ]
+
     thresholds = config.get("thresholds", {})
     drift_type = drift.triggered(thresholds)
 
@@ -488,6 +520,9 @@ def next_chunk(
                 f"  entries: {drift_counts.get(drift_type, 0)}\n"
                 f"  input_file: {input_path.name}\n"
             )
+            if drift_type == "workflow_synthesis":
+                wids = [w["id"] for w in drift.workflow_repetitions if w.get("id")]
+                fh.write(f"  workflow_ids: {wids}\n")
 
         return ChunkResult(
             chunk_id=chunk_id,
