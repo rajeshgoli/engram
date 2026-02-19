@@ -277,8 +277,10 @@ def _read_synthesized_workflow_ids(manifest_file: Path) -> set[str]:
         if not isinstance(entry, dict):
             continue
         if entry.get("type") == "workflow_synthesis":
-            for wid in entry.get("workflow_ids", []):
-                synthesized.add(wid)
+            wids = entry.get("workflow_ids", [])
+            if isinstance(wids, list):
+                for wid in wids:
+                    synthesized.add(wid)
     return synthesized
 
 
@@ -472,9 +474,13 @@ def next_chunk(
     # set so the threshold retains its original semantics (total CURRENT count).
     synthesized_ids = _read_synthesized_workflow_ids(manifest_file)
     if synthesized_ids and drift.workflow_repetitions:
-        current_ids = {w.get("id") for w in drift.workflow_repetitions if w.get("id")}
-        if current_ids.issubset(synthesized_ids):
-            drift.workflow_repetitions = []
+        # If any workflow lacks a stable ID, skip dedup — can't safely assert
+        # "all synthesized" when some entries are unidentifiable.
+        all_have_ids = all(w.get("id") for w in drift.workflow_repetitions)
+        if all_have_ids:
+            current_ids = {w["id"] for w in drift.workflow_repetitions}
+            if current_ids.issubset(synthesized_ids):
+                drift.workflow_repetitions = []
 
     thresholds = config.get("thresholds", {})
     drift_type = drift.triggered(thresholds)
