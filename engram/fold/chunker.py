@@ -461,14 +461,14 @@ def next_chunk(
     # Check drift priorities
     drift = scan_drift(config, project_root, fold_from=fold_from)
 
-    # Exclude workflow IDs already covered in a previous synthesis chunk so
-    # the fold doesn't loop when an agent keeps all workflows CURRENT.
+    # Suppress synthesis only when every CURRENT workflow was already covered
+    # in a prior synthesis chunk.  If any new ID exists, fire with the full
+    # set so the threshold retains its original semantics (total CURRENT count).
     synthesized_ids = _read_synthesized_workflow_ids(manifest_file)
-    if synthesized_ids:
-        drift.workflow_repetitions = [
-            w for w in drift.workflow_repetitions
-            if w.get("id") not in synthesized_ids
-        ]
+    if synthesized_ids and drift.workflow_repetitions:
+        current_ids = {w.get("id") for w in drift.workflow_repetitions if w.get("id")}
+        if current_ids.issubset(synthesized_ids):
+            drift.workflow_repetitions = []
 
     thresholds = config.get("thresholds", {})
     drift_type = drift.triggered(thresholds)
