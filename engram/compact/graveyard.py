@@ -209,17 +209,15 @@ def compact_living_doc(
 
     for sec in sections:
         if is_stub(sec["heading"]):
-            # Already a stub — keep as-is
-            parts.append(sec["text"])
+            # Already in graveyard — remove entirely from living doc
+            chars_saved += len(sec["text"])
             continue
 
         status = sec.get("status")
         if status in eligible_statuses:
-            # Move to graveyard — add trailing blank line to maintain
-            # valid markdown structure between sections
-            stub = move_to_graveyard(sec, doc_type, graveyard_path)
-            parts.append(stub + "\n")
-            chars_saved += len(sec["text"]) - len(stub) - 1
+            # Move to graveyard — remove entirely from living doc (no stub)
+            move_to_graveyard(sec, doc_type, graveyard_path)
+            chars_saved += len(sec["text"])
         else:
             # Keep full text
             parts.append(sec["text"])
