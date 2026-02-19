@@ -328,8 +328,8 @@ def compute_budget(config: dict, doc_paths: dict[str, Path]) -> tuple[int, int]:
     """
     budget_cfg = config.get("budget", {})
     context_limit = budget_cfg.get("context_limit_chars", 600_000)
-    overhead = budget_cfg.get("instructions_overhead", 10_000)
-    max_chunk = budget_cfg.get("max_chunk_chars", 200_000)
+    overhead = budget_cfg.get("instructions_overhead", 100_000)
+    max_chunk = budget_cfg.get("max_chunk_chars", 80_000)
 
     living_doc_keys = ["timeline", "concepts", "epistemic", "workflows"]
     living_docs_chars = 0
