@@ -467,6 +467,7 @@ def next_chunk(
             date_range=drift_type,
             input_path=input_path,
             doc_paths=doc_paths,
+            project_root=project_root,
         )
         prompt_path = chunks_dir / f"chunk_{chunk_id:03d}_prompt.txt"
         prompt_path.write_text(prompt_content)
@@ -566,6 +567,7 @@ def next_chunk(
         date_range=date_range,
         input_path=input_path,
         doc_paths=doc_paths,
+        project_root=project_root,
     )
     prompt_path = chunks_dir / f"chunk_{chunk_id:03d}_prompt.txt"
     prompt_path.write_text(prompt_content)
