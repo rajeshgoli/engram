@@ -620,6 +620,27 @@ class TestNextChunk:
         )
         assert r2.drift_entry_count == 7
 
+    def test_workflow_synthesis_malformed_manifest_degrades_gracefully(self, project, config):
+        """A malformed manifest must not abort next_chunk — synthesis fires as if no prior run."""
+        workflows = project / "docs" / "decisions" / "workflow_registry.md"
+        workflows.write_text(
+            "# Workflow Registry\n\n"
+            "## W001: deploy_process (CURRENT)\n- **Context:** Deploy.\n\n"
+            "## W002: review_process (CURRENT)\n- **Context:** Review.\n\n"
+            "## W003: test_process (CURRENT)\n- **Context:** Test.\n\n"
+            "## W004: release_process (CURRENT)\n- **Context:** Release.\n\n"
+        )
+        # Write a malformed manifest
+        manifest = project / ".engram" / "chunks_manifest.yaml"
+        manifest.write_text("- id: 1\n  type: workflow_synthesis\n  workflow_ids: [W001\n  bad yaml here\n")
+
+        _write_queue(project, [_make_doc_item(chars=100)])
+
+        # Must not raise — synthesis fires normally (dedup skipped)
+        result = next_chunk(config, project)
+        assert result.chunk_type == "workflow_synthesis"
+        assert result.drift_entry_count == 4
+
     def test_queue_not_found_raises(self, project, config):
         with pytest.raises(FileNotFoundError, match="No queue found"):
             next_chunk(config, project)

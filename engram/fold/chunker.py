@@ -266,10 +266,16 @@ def _read_synthesized_workflow_ids(manifest_file: Path) -> set[str]:
         return set()
     import yaml  # local import — yaml is a standard engram dependency
 
-    with open(manifest_file) as fh:
-        manifest = yaml.safe_load(fh) or []
+    try:
+        with open(manifest_file) as fh:
+            manifest = yaml.safe_load(fh) or []
+    except yaml.YAMLError as exc:
+        log.warning("Could not parse %s — skipping synthesis dedup: %s", manifest_file, exc)
+        return set()
     synthesized: set[str] = set()
     for entry in manifest:
+        if not isinstance(entry, dict):
+            continue
         if entry.get("type") == "workflow_synthesis":
             for wid in entry.get("workflow_ids", []):
                 synthesized.add(wid)
