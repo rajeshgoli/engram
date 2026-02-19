@@ -457,6 +457,7 @@ def next_chunk(
             doc_paths=doc_paths,
             ref_commit=ref_commit,
             ref_date=fold_from,
+            project_root=project_root,
         )
 
         input_path = chunks_dir / f"chunk_{chunk_id:03d}_input.md"

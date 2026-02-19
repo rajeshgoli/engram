@@ -127,7 +127,7 @@ For each cluster of related workflows:
 
 Run the linter after completing all edits:
 ```
-engram lint --project-root <project_root>
+{{ lint_cmd }}
 ```
 Fix every violation reported. Re-run until lint passes with 0 violations.
 Do not stop until lint is clean.
