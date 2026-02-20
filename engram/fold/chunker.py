@@ -24,6 +24,8 @@ from engram.parse import extract_id, is_stub, parse_sections
 
 # Regex for ISO dates (YYYY-MM-DD) in text
 _DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+# Markdown-style field header, e.g. "History:" / "**History:**" / "- **History:**"
+_FIELD_HEADER_RE = re.compile(r"^(?:\*\*)?([A-Za-z][A-Za-z _/-]*?)(?:\*\*)?:\s*(.*)$")
 
 
 @dataclass
@@ -238,10 +240,12 @@ def _extract_latest_history_date(section_text: str) -> datetime | None:
     for line in section_text.splitlines():
         stripped = line.strip()
         normalized = stripped.removeprefix("- ").strip()
+        field_match = _FIELD_HEADER_RE.match(normalized)
+        field_name = field_match.group(1).strip().lower() if field_match else None
 
-        if normalized.startswith("**History:**"):
+        if field_name == "history":
             in_history = True
-            remainder = normalized[len("**History:**"):].strip()
+            remainder = field_match.group(2).strip() if field_match else ""
             if remainder:
                 history_lines.append(remainder)
             continue
@@ -251,8 +255,8 @@ def _extract_latest_history_date(section_text: str) -> datetime | None:
 
         if stripped.startswith("## "):
             break
-        # Stop at the next top-level epistemic field (e.g. **Agent guidance:** ...).
-        if re.match(r"^\*\*[^*]+:\*\*(?:\s.*)?$", normalized):
+        # Stop at the next epistemic field (plain or bold).
+        if field_match:
             break
 
         if stripped:

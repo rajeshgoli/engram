@@ -471,6 +471,56 @@ class TestFindStaleEpistemicEntries:
         assert len(results) == 1
         assert results[0]["id"] == "E014"
 
+    def test_plain_history_field_is_parsed(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E015: plain history format (believed)\n"
+            "History:\n"
+            f"- {old_date}: first noted\n"
+        )
+        results = _find_stale_epistemic_entries(
+            epistemic,
+            days_threshold=90,
+        )
+        assert len(results) == 1
+        assert results[0]["id"] == "E015"
+
+    def test_bullet_prefixed_plain_history_field_is_parsed(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E017: bullet plain history format (believed)\n"
+            "- History:\n"
+            f"- {old_date}: first noted\n"
+        )
+        results = _find_stale_epistemic_entries(
+            epistemic,
+            days_threshold=90,
+        )
+        assert len(results) == 1
+        assert results[0]["id"] == "E017"
+
+    def test_plain_post_history_field_date_does_not_override_history_date(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        recent_date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E016: plain field boundary check (believed)\n"
+            "History:\n"
+            f"- {old_date}: original claim\n"
+            f"Agent guidance: recheck after {recent_date}\n"
+        )
+        results = _find_stale_epistemic_entries(
+            epistemic,
+            days_threshold=90,
+        )
+        assert len(results) == 1
+        assert results[0]["id"] == "E016"
+
 
 # ------------------------------------------------------------------
 # Workflow repetition detection
