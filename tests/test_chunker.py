@@ -455,6 +455,22 @@ class TestFindStaleEpistemicEntries:
         assert len(results) == 1
         assert results[0]["id"] == "E013"
 
+    def test_bullet_prefixed_history_field_is_parsed(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E014: bullet history format (unverified)\n"
+            "- **History:**\n"
+            f"- {old_date}: first noted\n"
+        )
+        results = _find_stale_epistemic_entries(
+            epistemic,
+            days_threshold=90,
+        )
+        assert len(results) == 1
+        assert results[0]["id"] == "E014"
+
 
 # ------------------------------------------------------------------
 # Workflow repetition detection

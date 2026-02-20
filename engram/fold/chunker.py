@@ -237,10 +237,11 @@ def _extract_latest_history_date(section_text: str) -> datetime | None:
 
     for line in section_text.splitlines():
         stripped = line.strip()
+        normalized = stripped.removeprefix("- ").strip()
 
-        if stripped.startswith("**History:**"):
+        if normalized.startswith("**History:**"):
             in_history = True
-            remainder = stripped[len("**History:**"):].strip()
+            remainder = normalized[len("**History:**"):].strip()
             if remainder:
                 history_lines.append(remainder)
             continue
@@ -251,7 +252,7 @@ def _extract_latest_history_date(section_text: str) -> datetime | None:
         if stripped.startswith("## "):
             break
         # Stop at the next top-level epistemic field (e.g. **Agent guidance:** ...).
-        if re.match(r"^\*\*[^*]+:\*\*(?:\s.*)?$", stripped):
+        if re.match(r"^\*\*[^*]+:\*\*(?:\s.*)?$", normalized):
             break
 
         if stripped:
