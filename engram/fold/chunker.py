@@ -254,6 +254,36 @@ def _find_claims_by_status(
     return results
 
 
+def _read_synthesized_workflow_ids(manifest_file: Path) -> set[str]:
+    """Return workflow IDs already covered in a previous synthesis chunk.
+
+    Reads ``chunks_manifest.yaml`` and collects every workflow ID recorded
+    under a ``workflow_synthesis`` entry.  These are excluded from the next
+    synthesis trigger so the fold doesn't loop infinitely when an agent
+    decides to keep all workflows as CURRENT.
+    """
+    if not manifest_file.exists():
+        return set()
+    import yaml  # local import — yaml is a standard engram dependency
+
+    try:
+        with open(manifest_file) as fh:
+            manifest = yaml.safe_load(fh) or []
+    except yaml.YAMLError as exc:
+        log.warning("Could not parse %s — skipping synthesis dedup: %s", manifest_file, exc)
+        return set()
+    synthesized: set[str] = set()
+    for entry in manifest:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("type") == "workflow_synthesis":
+            wids = entry.get("workflow_ids", [])
+            if isinstance(wids, list):
+                for wid in wids:
+                    synthesized.add(wid)
+    return synthesized
+
+
 def _find_workflow_repetitions(workflows_path: Path) -> list[dict]:
     """Find CURRENT workflow entries as candidates for synthesis.
 
@@ -438,6 +468,20 @@ def next_chunk(
 
     # Check drift priorities
     drift = scan_drift(config, project_root, fold_from=fold_from)
+
+    # Suppress synthesis only when every CURRENT workflow was already covered
+    # in a prior synthesis chunk.  If any new ID exists, fire with the full
+    # set so the threshold retains its original semantics (total CURRENT count).
+    synthesized_ids = _read_synthesized_workflow_ids(manifest_file)
+    if synthesized_ids and drift.workflow_repetitions:
+        # If any workflow lacks a stable ID, skip dedup — can't safely assert
+        # "all synthesized" when some entries are unidentifiable.
+        all_have_ids = all(w.get("id") for w in drift.workflow_repetitions)
+        if all_have_ids:
+            current_ids = {w["id"] for w in drift.workflow_repetitions}
+            if current_ids.issubset(synthesized_ids):
+                drift.workflow_repetitions = []
+
     thresholds = config.get("thresholds", {})
     drift_type = drift.triggered(thresholds)
 
@@ -488,6 +532,9 @@ def next_chunk(
                 f"  entries: {drift_counts.get(drift_type, 0)}\n"
                 f"  input_file: {input_path.name}\n"
             )
+            if drift_type == "workflow_synthesis":
+                wids = [w["id"] for w in drift.workflow_repetitions if w.get("id")]
+                fh.write(f"  workflow_ids: {wids}\n")
 
         return ChunkResult(
             chunk_id=chunk_id,
