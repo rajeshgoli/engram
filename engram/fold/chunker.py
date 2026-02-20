@@ -31,6 +31,7 @@ class DriftReport:
     """Results from scanning living docs for drift conditions."""
 
     orphaned_concepts: list[dict] = field(default_factory=list)
+    epistemic_audit: list[dict] = field(default_factory=list)
     contested_claims: list[dict] = field(default_factory=list)
     stale_unverified: list[dict] = field(default_factory=list)
     workflow_repetitions: list[dict] = field(default_factory=list)
@@ -39,11 +40,14 @@ class DriftReport:
     def triggered(self, thresholds: dict) -> str | None:
         """Return the highest-priority drift type that exceeds its threshold.
 
-        Priority order: orphans > contested > stale_unverified > workflow.
+        Priority order:
+        orphans > epistemic_audit > contested > stale_unverified > workflow.
         Returns None if no threshold is exceeded.
         """
         if len(self.orphaned_concepts) > thresholds.get("orphan_triage", 50):
             return "orphan_triage"
+        if len(self.epistemic_audit) > thresholds.get("epistemic_audit", 0):
+            return "epistemic_audit"
         if len(self.contested_claims) > thresholds.get("contested_review", 5):
             return "contested_review"
         if len(self.stale_unverified) > thresholds.get("stale_unverified", 10):
@@ -60,7 +64,7 @@ class ChunkResult:
     chunk_id: int
     input_path: Path
     prompt_path: Path
-    chunk_type: str  # "fold" | "orphan_triage" | "contested_review" | ...
+    chunk_type: str  # "fold" | "orphan_triage" | "epistemic_audit" | ...
     items_count: int
     chunk_chars: int
     budget: int
@@ -226,6 +230,102 @@ def _extract_latest_date(text: str) -> datetime | None:
     return max(parsed) if parsed else None
 
 
+def _extract_latest_history_date(section_text: str) -> datetime | None:
+    """Extract the most recent YYYY-MM-DD date from an epistemic History block."""
+    history_lines: list[str] = []
+    in_history = False
+
+    for line in section_text.splitlines():
+        stripped = line.strip()
+        normalized = stripped.removeprefix("- ").strip()
+
+        if normalized.startswith("**History:**"):
+            in_history = True
+            remainder = normalized[len("**History:**"):].strip()
+            if remainder:
+                history_lines.append(remainder)
+            continue
+
+        if not in_history:
+            continue
+
+        if stripped.startswith("## "):
+            break
+        if normalized.startswith("**") and normalized.endswith(":"):
+            break
+
+        if stripped:
+            history_lines.append(stripped)
+
+    if not history_lines:
+        return None
+
+    return _extract_latest_date("\n".join(history_lines))
+
+
+def _parse_queue_date(raw: Any) -> datetime | None:
+    """Parse a queue entry date into timezone-aware UTC datetime."""
+    if not isinstance(raw, str):
+        return None
+    value = raw.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        try:
+            parsed = datetime.strptime(value[:10], "%Y-%m-%d")
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _extract_epistemic_subject(heading: str) -> str | None:
+    """Extract an epistemic entry subject from heading text."""
+    match = re.match(r"^##\s+E\d{3,}:\s+(.+)$", heading.strip())
+    if not match:
+        return None
+    subject = match.group(1)
+    subject = re.sub(r"\s+\([^)]*\)\s*(?:→\s+\S+)?\s*$", "", subject).strip()
+    return subject or None
+
+
+def _read_queue_entry_text(project_root: Path, item: dict[str, Any]) -> str:
+    """Read queue entry text for subject-reference matching."""
+    rel_path = item.get("path")
+    if not isinstance(rel_path, str):
+        return ""
+
+    item_path = project_root / rel_path
+    try:
+        if item.get("type") == "issue":
+            from engram.fold.sources import render_issue_markdown
+            issue_data = json.loads(item_path.read_text())
+            return render_issue_markdown(issue_data)
+        return item_path.read_text(errors="ignore")
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return ""
+
+
+def _read_queue_entries(queue_file: Path) -> list[dict[str, Any]]:
+    """Load queue.jsonl entries, skipping malformed lines."""
+    if not queue_file.exists():
+        return []
+    entries: list[dict[str, Any]] = []
+    with open(queue_file) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(entry, dict):
+                entries.append(entry)
+    return entries
+
+
 def _find_claims_by_status(
     epistemic_path: Path, status: str, days_threshold: int,
 ) -> list[dict]:
@@ -251,6 +351,74 @@ def _find_claims_by_status(
                 "days_old": age_days,
                 "last_date": latest.strftime("%Y-%m-%d"),
             })
+    return results
+
+
+def _find_stale_epistemic_entries(
+    epistemic_path: Path,
+    *,
+    days_threshold: int,
+    project_root: Path | None = None,
+    queue_entries: list[dict[str, Any]] | None = None,
+) -> list[dict]:
+    """Find stale believed/unverified epistemic entries for audit.
+
+    An entry is stale when:
+    - status is believed or unverified
+    - age since latest History date exceeds days_threshold
+    - no queue item references the entry subject after that history date
+    """
+    if not epistemic_path.exists():
+        return []
+
+    searchable_queue: list[tuple[datetime, str]] = []
+    if project_root and queue_entries:
+        for item in queue_entries:
+            queued_at = _parse_queue_date(item.get("date"))
+            if queued_at is None:
+                continue
+            text = _read_queue_entry_text(project_root, item)
+            if text:
+                searchable_queue.append((queued_at, text.lower()))
+
+    sections = parse_sections(epistemic_path.read_text())
+    now = datetime.now(timezone.utc)
+    results: list[dict] = []
+
+    for sec in sections:
+        if sec["status"] not in {"believed", "unverified"}:
+            continue
+        if is_stub(sec["heading"]):
+            continue
+
+        latest_history = _extract_latest_history_date(sec["text"])
+        if latest_history is None:
+            continue
+
+        age_days = (now - latest_history).days
+        if age_days <= days_threshold:
+            continue
+
+        subject = _extract_epistemic_subject(sec["heading"])
+        subject_lower = subject.lower() if subject else None
+        was_referenced = bool(
+            subject_lower and any(
+                queued_at > latest_history and subject_lower in queue_text
+                for queued_at, queue_text in searchable_queue
+            )
+        )
+        if was_referenced:
+            continue
+
+        results.append({
+            "name": sec["heading"].lstrip("#").strip(),
+            "id": extract_id(sec["heading"]),
+            "subject": subject,
+            "status": sec["status"],
+            "days_old": age_days,
+            "last_date": latest_history.strftime("%Y-%m-%d"),
+        })
+
     return results
 
 
@@ -318,6 +486,7 @@ def scan_drift(
     """
     paths = resolve_doc_paths(config, project_root)
     thresholds = config.get("thresholds", {})
+    queue_entries = _read_queue_entries(project_root / ".engram" / "queue.jsonl")
 
     ref_commit: str | None = None
     if fold_from:
@@ -332,6 +501,12 @@ def scan_drift(
     return DriftReport(
         orphaned_concepts=_find_orphaned_concepts(
             paths["concepts"], project_root, ref_commit=ref_commit,
+        ),
+        epistemic_audit=_find_stale_epistemic_entries(
+            paths["epistemic"],
+            days_threshold=thresholds.get("stale_epistemic_days", 90),
+            project_root=project_root,
+            queue_entries=queue_entries,
         ),
         contested_claims=_find_claims_by_status(
             paths["epistemic"], "contested",
@@ -520,6 +695,7 @@ def next_chunk(
         # Count drift entries for reporting
         drift_counts = {
             "orphan_triage": len(drift.orphaned_concepts),
+            "epistemic_audit": len(drift.epistemic_audit),
             "contested_review": len(drift.contested_claims),
             "stale_unverified": len(drift.stale_unverified),
             "workflow_synthesis": len(drift.workflow_repetitions),

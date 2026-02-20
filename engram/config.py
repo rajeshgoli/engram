@@ -37,6 +37,7 @@ DEFAULTS: dict[str, Any] = {
         "orphan_triage": 50,
         "contested_review_days": 14,
         "stale_unverified_days": 30,
+        "stale_epistemic_days": 90,
         "workflow_repetition": 3,
     },
     "budget": {

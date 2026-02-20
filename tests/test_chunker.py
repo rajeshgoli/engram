@@ -15,6 +15,7 @@ from engram.fold.chunker import (
     _extract_latest_date,
     _find_claims_by_status,
     _find_orphaned_concepts,
+    _find_stale_epistemic_entries,
     _find_workflow_repetitions,
     _render_item_content,
     compute_budget,
@@ -48,6 +49,7 @@ thresholds:
   orphan_triage: 3
   contested_review_days: 14
   stale_unverified_days: 30
+  stale_epistemic_days: 90
   workflow_repetition: 3
 budget:
   context_limit_chars: 600000
@@ -119,6 +121,18 @@ class TestDriftReportTriggered:
         )
         assert report.triggered({"orphan_triage": 50}) is None
 
+    def test_epistemic_audit_triggered(self):
+        report = DriftReport(
+            epistemic_audit=[{"name": "E001"}],
+        )
+        assert report.triggered({}) == "epistemic_audit"
+
+    def test_epistemic_audit_at_threshold_not_triggered(self):
+        report = DriftReport(
+            epistemic_audit=[{"name": "E001"}],
+        )
+        assert report.triggered({"epistemic_audit": 1}) is None
+
     def test_contested_review_triggered(self):
         report = DriftReport(
             contested_claims=[{"name": f"claim{i}", "days_old": 20} for i in range(6)]
@@ -155,6 +169,13 @@ class TestDriftReportTriggered:
             contested_claims=[{"name": f"claim{i}"} for i in range(6)],
         )
         assert report.triggered({"orphan_triage": 3, "contested_review": 5}) == "orphan_triage"
+
+    def test_priority_order_epistemic_over_contested(self):
+        report = DriftReport(
+            epistemic_audit=[{"name": "E001"}],
+            contested_claims=[{"name": f"claim{i}"} for i in range(6)],
+        )
+        assert report.triggered({"contested_review": 5}) == "epistemic_audit"
 
     def test_priority_order_contested_over_stale(self):
         report = DriftReport(
@@ -319,6 +340,104 @@ class TestFindClaimsByStatus:
         assert results == []
 
 
+class TestFindStaleEpistemicEntries:
+    def test_finds_stale_believed_entry(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E008: harness phase 0 completion (believed)\n"
+            "**History:**\n"
+            f"- {old_date}: backlog noted\n"
+        )
+        results = _find_stale_epistemic_entries(
+            epistemic,
+            days_threshold=90,
+        )
+        assert len(results) == 1
+        assert results[0]["id"] == "E008"
+        assert results[0]["status"] == "believed"
+
+    def test_threshold_behavior_age_equal_not_stale(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        exact_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E010: recent enough claim (unverified)\n"
+            "**History:**\n"
+            f"- {exact_date}: noted\n"
+        )
+        results = _find_stale_epistemic_entries(
+            epistemic,
+            days_threshold=30,
+        )
+        assert results == []
+
+    def test_queue_reference_since_history_suppresses(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E011: harness phase 0 completion (believed)\n"
+            "**History:**\n"
+            f"- {old_date}: backlog noted\n"
+        )
+
+        note_path = project / "docs" / "working" / "harness_update.md"
+        note_path.parent.mkdir(parents=True, exist_ok=True)
+        note_path.write_text("Harness phase 0 completion is now tracked elsewhere.")
+
+        queue_entries = [
+            {
+                "date": datetime.now(timezone.utc).isoformat(),
+                "type": "doc",
+                "path": "docs/working/harness_update.md",
+                "chars": 100,
+                "pass": "initial",
+            },
+        ]
+        results = _find_stale_epistemic_entries(
+            epistemic,
+            days_threshold=90,
+            project_root=project,
+            queue_entries=queue_entries,
+        )
+        assert results == []
+
+    def test_queue_reference_before_history_does_not_suppress(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        history_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        old_queue_date = (datetime.now(timezone.utc) - timedelta(days=150)).isoformat()
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E012: harness phase 0 completion (believed)\n"
+            "**History:**\n"
+            f"- {history_date}: backlog noted\n"
+        )
+
+        note_path = project / "docs" / "working" / "old_note.md"
+        note_path.parent.mkdir(parents=True, exist_ok=True)
+        note_path.write_text("harness phase 0 completion old context")
+
+        queue_entries = [
+            {
+                "date": old_queue_date,
+                "type": "doc",
+                "path": "docs/working/old_note.md",
+                "chars": 100,
+                "pass": "initial",
+            },
+        ]
+        results = _find_stale_epistemic_entries(
+            epistemic,
+            days_threshold=90,
+            project_root=project,
+            queue_entries=queue_entries,
+        )
+        assert len(results) == 1
+        assert results[0]["id"] == "E012"
+
+
 # ------------------------------------------------------------------
 # Workflow repetition detection
 # ------------------------------------------------------------------
@@ -404,6 +523,7 @@ class TestScanDrift:
     def test_no_drift_on_empty_docs(self, project, config):
         report = scan_drift(config, project)
         assert report.orphaned_concepts == []
+        assert report.epistemic_audit == []
         assert report.contested_claims == []
         assert report.stale_unverified == []
         assert report.workflow_repetitions == []
@@ -420,6 +540,22 @@ class TestScanDrift:
         assert len(report.orphaned_concepts) == 4
         # threshold is 3, so 4 > 3 triggers
         assert report.triggered(config["thresholds"]) == "orphan_triage"
+
+    def test_epistemic_audit_detected_and_triggered(self, project, config):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E008: harness phase 0 completion (believed)\n"
+            "**History:**\n"
+            f"- {old_date}: backlog noted\n"
+        )
+
+        config["thresholds"]["stale_epistemic_days"] = 90
+        report = scan_drift(config, project)
+        assert len(report.epistemic_audit) == 1
+        assert report.epistemic_audit[0]["id"] == "E008"
+        assert report.triggered(config["thresholds"]) == "epistemic_audit"
 
 
 # ------------------------------------------------------------------
@@ -561,6 +697,31 @@ class TestNextChunk:
         input_text = result.input_path.read_text()
         assert "Orphan Triage Round" in input_text
         assert "orphan_0" in input_text
+
+    def test_epistemic_audit_chunk(self, project, config):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E008: harness phase 0 completion (believed)\n"
+            "**History:**\n"
+            f"- {old_date}: backlog noted\n"
+        )
+        config["thresholds"]["stale_epistemic_days"] = 90
+
+        _write_queue(project, [
+            _make_doc_item(chars=100),
+        ])
+
+        result = next_chunk(config, project)
+        assert result.chunk_type == "epistemic_audit"
+        assert result.items_count == 0
+        assert result.drift_entry_count == 1
+        assert result.remaining_queue == 1
+
+        input_text = result.input_path.read_text()
+        assert "Epistemic Audit Round" in input_text
+        assert "harness phase 0 completion" in input_text
 
     def test_workflow_synthesis_not_repeated_for_same_ids(self, project, config):
         """workflow_synthesis should not re-fire when all CURRENT IDs were already synthesized."""
