@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from engram.fold.chunker import (
+    _QUEUE_TEXT_CACHE,
     ChunkResult,
     DriftReport,
     _extract_code_paths,
@@ -17,6 +18,7 @@ from engram.fold.chunker import (
     _find_orphaned_concepts,
     _find_stale_epistemic_entries,
     _find_workflow_repetitions,
+    _read_queue_entry_text,
     _render_item_content,
     compute_budget,
     next_chunk,
@@ -341,6 +343,30 @@ class TestFindClaimsByStatus:
 
 
 class TestFindStaleEpistemicEntries:
+    def test_queue_text_cache_avoids_reread(self, project, monkeypatch):
+        _QUEUE_TEXT_CACHE.clear()
+
+        doc = project / "docs" / "working" / "cache_test.md"
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text("Harness phase 0 completion detail")
+        item = {
+            "date": datetime.now(timezone.utc).isoformat(),
+            "type": "doc",
+            "path": "docs/working/cache_test.md",
+            "chars": 100,
+            "pass": "initial",
+        }
+
+        first = _read_queue_entry_text(project, item)
+        assert "harness phase 0 completion detail" in first
+
+        def fail_read_text(self, *args, **kwargs):
+            raise AssertionError("expected cached queue text")
+
+        monkeypatch.setattr(Path, "read_text", fail_read_text)
+        second = _read_queue_entry_text(project, item)
+        assert second == first
+
     def test_finds_stale_believed_entry(self, project):
         epistemic = project / "docs" / "decisions" / "epistemic_state.md"
         old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")

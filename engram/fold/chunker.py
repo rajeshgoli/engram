@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import subprocess
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,10 @@ from engram.parse import extract_id, is_stub, parse_sections
 _DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 # Markdown-style field header, e.g. "History:" / "**History:**" / "- **History:**"
 _FIELD_HEADER_RE = re.compile(r"^(?:\*\*)?([A-Za-z][A-Za-z _/-]*?)(?:\*\*)?:\s*(.*)$")
+
+# Cache lowercased queue file text across repeated drift scans.
+_QUEUE_TEXT_CACHE_MAX_ENTRIES = 2048
+_QUEUE_TEXT_CACHE: OrderedDict[tuple[str, str, int, int], str] = OrderedDict()
 
 
 @dataclass
@@ -296,24 +301,55 @@ def _extract_epistemic_subject(heading: str) -> str | None:
 
 
 def _read_queue_entry_text(project_root: Path, item: dict[str, Any]) -> str:
-    """Read queue entry text for subject-reference matching."""
+    """Read queue entry text for subject-reference matching.
+
+    Returns lowercased text and caches it by path+mtime+size to avoid
+    re-reading large queue files on every drift scan.
+    """
     rel_path = item.get("path")
     if not isinstance(rel_path, str):
         return ""
 
     item_path = project_root / rel_path
+    item_type = str(item.get("type", ""))
+
     try:
-        if item.get("type") == "issue":
+        stat = item_path.stat()
+    except OSError:
+        return ""
+
+    cache_key = (
+        str(item_path.resolve()),
+        item_type,
+        stat.st_mtime_ns,
+        stat.st_size,
+    )
+    cached = _QUEUE_TEXT_CACHE.get(cache_key)
+    if cached is not None:
+        _QUEUE_TEXT_CACHE.move_to_end(cache_key)
+        return cached
+
+    try:
+        if item_type == "issue":
             from engram.fold.sources import render_issue_markdown
             issue_data = json.loads(item_path.read_text())
             rendered = render_issue_markdown(issue_data)
             issue_title = issue_data.get("title") or item.get("issue_title")
             if isinstance(issue_title, str) and issue_title.strip():
-                return f"{issue_title.strip()}\n\n{rendered}"
-            return rendered
-        return item_path.read_text(errors="ignore")
+                text = f"{issue_title.strip()}\n\n{rendered}"
+            else:
+                text = rendered
+        else:
+            text = item_path.read_text(errors="ignore")
     except (FileNotFoundError, OSError, json.JSONDecodeError):
         return ""
+
+    lowered = text.lower()
+    _QUEUE_TEXT_CACHE[cache_key] = lowered
+    _QUEUE_TEXT_CACHE.move_to_end(cache_key)
+    while len(_QUEUE_TEXT_CACHE) > _QUEUE_TEXT_CACHE_MAX_ENTRIES:
+        _QUEUE_TEXT_CACHE.popitem(last=False)
+    return lowered
 
 
 def _read_queue_entries(queue_file: Path) -> list[dict[str, Any]]:
@@ -388,7 +424,7 @@ def _find_stale_epistemic_entries(
                 continue
             text = _read_queue_entry_text(project_root, item)
             if text:
-                searchable_queue.append((queued_at, text.lower()))
+                searchable_queue.append((queued_at, text))
 
     sections = parse_sections(epistemic_path.read_text())
     now = datetime.now(timezone.utc)
