@@ -87,6 +87,8 @@ def render_triage_input(
 
     if drift_type == "orphan_triage":
         entries = drift_report.orphaned_concepts
+    elif drift_type == "epistemic_audit":
+        entries = drift_report.epistemic_audit
     elif drift_type == "contested_review":
         entries = drift_report.contested_claims
     elif drift_type == "stale_unverified":

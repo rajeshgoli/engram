@@ -105,6 +105,7 @@ class TestLoadConfig:
         assert config["model"] == "sonnet"
         assert config["budget"]["context_limit_chars"] == 600_000
         assert config["thresholds"]["orphan_triage"] == 50
+        assert config["thresholds"]["stale_epistemic_days"] == 90
 
     def test_missing_config_file(self, tmp_path: Path) -> None:
         with pytest.raises(ConfigError, match="Config not found"):

@@ -64,6 +64,23 @@ rename when it reaches that date in the queue.
 {% endif %}
 
 **Goal: get orphan count to 0.** Every entry must be resolved.
+{% elif drift_type == "epistemic_audit" %}
+# Epistemic Audit Round (Chunk {{ chunk_id }})
+
+This is a dedicated review round for stale epistemic entries.
+These entries are marked believed/unverified, older than the audit threshold,
+and have not been referenced by recent queue items.
+
+For each entry below:
+- **Confirm** if still valid. Keep status and add a fresh History update.
+- **Refute** if no longer true. Move to {{ doc_paths.epistemic_graveyard }} and replace with stub.
+- **Supersede** if the belief changed. Update to the current claim with clear evidence/history.
+
+{% for e in entries %}
+- **{{ e.name }}**{% if e.id %} ({{ e.id }}){% endif %}: {{ e.days_old }} days stale (last history: {{ e.last_date }})
+{% endfor %}
+
+({{ entry_count }} stale epistemic entries to audit)
 {% elif drift_type == "contested_review" %}
 # Contested Claims Review (Chunk {{ chunk_id }})
 
