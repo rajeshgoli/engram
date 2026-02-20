@@ -437,6 +437,24 @@ class TestFindStaleEpistemicEntries:
         assert len(results) == 1
         assert results[0]["id"] == "E012"
 
+    def test_post_history_field_date_does_not_override_history_date(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        recent_date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E013: parser boundary check (believed)\n"
+            "**History:**\n"
+            f"- {old_date}: original claim\n"
+            f"**Agent guidance:** recheck after {recent_date}\n"
+        )
+        results = _find_stale_epistemic_entries(
+            epistemic,
+            days_threshold=90,
+        )
+        assert len(results) == 1
+        assert results[0]["id"] == "E013"
+
 
 # ------------------------------------------------------------------
 # Workflow repetition detection
