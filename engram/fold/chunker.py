@@ -306,7 +306,11 @@ def _read_queue_entry_text(project_root: Path, item: dict[str, Any]) -> str:
         if item.get("type") == "issue":
             from engram.fold.sources import render_issue_markdown
             issue_data = json.loads(item_path.read_text())
-            return render_issue_markdown(issue_data)
+            rendered = render_issue_markdown(issue_data)
+            issue_title = issue_data.get("title") or item.get("issue_title")
+            if isinstance(issue_title, str) and issue_title.strip():
+                return f"{issue_title.strip()}\n\n{rendered}"
+            return rendered
         return item_path.read_text(errors="ignore")
     except (FileNotFoundError, OSError, json.JSONDecodeError):
         return ""

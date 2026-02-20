@@ -437,6 +437,48 @@ class TestFindStaleEpistemicEntries:
         assert len(results) == 1
         assert results[0]["id"] == "E012"
 
+    def test_issue_title_reference_since_history_suppresses(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E018: harness phase 0 completion (believed)\n"
+            "**History:**\n"
+            f"- {old_date}: backlog noted\n"
+        )
+
+        issue_dir = project / "local_data" / "issues"
+        issue_dir.mkdir(parents=True, exist_ok=True)
+        issue_data = {
+            "number": 99,
+            "title": "harness phase 0 completion follow-up",
+            "body": "",
+            "state": "open",
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "labels": [],
+            "comments": [],
+        }
+        (issue_dir / "99.json").write_text(json.dumps(issue_data))
+
+        queue_entries = [
+            {
+                "date": datetime.now(timezone.utc).isoformat(),
+                "type": "issue",
+                "path": "local_data/issues/99.json",
+                "chars": 100,
+                "pass": "initial",
+                "issue_number": 99,
+                "issue_title": "harness phase 0 completion follow-up",
+            },
+        ]
+        results = _find_stale_epistemic_entries(
+            epistemic,
+            days_threshold=90,
+            project_root=project,
+            queue_entries=queue_entries,
+        )
+        assert results == []
+
     def test_post_history_field_date_does_not_override_history_date(self, project):
         epistemic = project / "docs" / "decisions" / "epistemic_state.md"
         old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
