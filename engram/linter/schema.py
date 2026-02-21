@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from engram.epistemic_history import infer_history_path
+from engram.epistemic_history import extract_external_history_for_entry, infer_history_path
 from engram.parse import Section, extract_id, is_stub, parse_sections
 
 
@@ -242,14 +242,15 @@ def validate_epistemic_state(content: str, epistemic_path: Path | None = None) -
                 ))
                 continue
 
-            # Basic ID integrity guard: history file must contain a heading for this ID.
-            if not re.search(rf"^##\s+{re.escape(entry_id)}\b", external_history, re.MULTILINE):
+            scoped_external_history = extract_external_history_for_entry(external_history, entry_id)
+            if not scoped_external_history:
                 violations.append(Violation(
                     "epistemic", entry_id,
                     f"Inferred history file does not contain matching heading for {entry_id}: "
                     f"{history_path}",
                 ))
-            history_sources.append(external_history)
+            else:
+                history_sources.append(scoped_external_history)
         elif not has_inline:
             violations.append(Violation(
                 "epistemic", entry_id,

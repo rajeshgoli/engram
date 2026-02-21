@@ -19,7 +19,11 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 from engram.config import resolve_doc_paths
-from engram.epistemic_history import extract_inline_history_lines, infer_history_path
+from engram.epistemic_history import (
+    extract_external_history_for_entry,
+    extract_inline_history_lines,
+    infer_history_path,
+)
 from engram.fold.ids import IDAllocator, estimate_new_entities
 from engram.fold.prompt import render_agent_prompt, render_chunk_input, render_triage_input
 from engram.parse import extract_id, is_stub, parse_sections
@@ -349,9 +353,13 @@ def _extract_latest_external_history_date(
     if not history_path.exists():
         return None
     try:
-        return _extract_latest_date(history_path.read_text())
+        history_text = history_path.read_text()
     except OSError:
         return None
+    entry_history = extract_external_history_for_entry(history_text, entry_id)
+    if not entry_history:
+        return None
+    return _extract_latest_date(entry_history)
 
 
 def _latest_epistemic_activity_date(

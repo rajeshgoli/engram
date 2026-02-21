@@ -354,6 +354,47 @@ Just a statement with no evidence chain.
         assert len(violations) == 2
         assert any("reaffirmed" in v.message for v in violations)
 
+    def test_external_history_requires_evidence_at_in_matching_entry_only(
+        self, tmp_path: Path,
+    ) -> None:
+        doc = """\
+## E010: mixed history sources (believed)
+**Current position:** still believed.
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E010.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E010: mixed history sources\n\n"
+            "- Epistemic audit Feb 21, 2026 (a3e0b731): reviewed\n\n"
+            "## E999: unrelated entry\n\n"
+            "- Evidence@a3e0b731 docs/decisions/timeline.md:42: unrelated -> believed\n",
+        )
+        violations = validate_epistemic_state(doc, epistemic_path=epistemic_path)
+        assert len(violations) == 1
+        assert "Evidence@<commit>" in violations[0].message
+
+    def test_external_history_reaffirmed_in_other_entry_is_ignored(
+        self, tmp_path: Path,
+    ) -> None:
+        doc = """\
+## E011: mixed history sources (believed)
+**Current position:** still believed.
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E011.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E011: mixed history sources\n\n"
+            "- Epistemic audit Feb 21, 2026 (a3e0b731): reviewed\n"
+            "- Evidence@a3e0b731 docs/decisions/timeline.md:42: confirmed -> believed\n\n"
+            "## E999: unrelated entry\n\n"
+            "- Epistemic audit Feb 21, 2026 (a3e0b731): reaffirmed -> believed\n",
+        )
+        assert validate_epistemic_state(doc, epistemic_path=epistemic_path) == []
+
 
 # ======================================================================
 # Schema: workflow_registry

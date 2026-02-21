@@ -31,6 +31,8 @@ _FIELD_PATTERNS = [
     re.compile(r"^([A-Za-z][A-Za-z _/-]*):\s*(.*)$"),
 ]
 
+_ENTRY_HEADING_RE = re.compile(r"^##\s+(E\d{3,})\b", re.IGNORECASE)
+
 
 def _parse_field_header(normalized_line: str) -> tuple[str, str] | None:
     """Parse a markdown field header and return (field_name_lower, remainder)."""
@@ -75,6 +77,41 @@ def infer_history_dir(epistemic_doc_path: Path) -> Path:
 def infer_history_path(epistemic_doc_path: Path, entry_id: str) -> Path:
     """Return inferred history file path for an epistemic entry ID."""
     return infer_history_dir(epistemic_doc_path) / f"{entry_id}.md"
+
+
+def extract_external_history_for_entry(history_text: str, entry_id: str) -> str | None:
+    """Return external history section text scoped to a single epistemic entry.
+
+    External history files are expected to be per-ID files, but this helper is
+    defensive and only returns the matching `## E###` section(s) when multiple
+    headings are present.
+    """
+    lines = history_text.splitlines()
+    section_starts: list[tuple[int, str]] = []
+
+    for i, line in enumerate(lines):
+        match = _ENTRY_HEADING_RE.match(line.strip())
+        if not match:
+            continue
+        section_starts.append((i, match.group(1).upper()))
+
+    if not section_starts:
+        return None
+
+    target_id = entry_id.upper()
+    matching_sections: list[str] = []
+    for i, (start, sec_id) in enumerate(section_starts):
+        if sec_id != target_id:
+            continue
+        end = section_starts[i + 1][0] if i + 1 < len(section_starts) else len(lines)
+        section_text = "\n".join(lines[start:end]).strip()
+        if section_text:
+            matching_sections.append(section_text)
+
+    if not matching_sections:
+        return None
+
+    return "\n\n".join(matching_sections)
 
 
 def extract_inline_history_lines(section_text: str) -> list[str]:

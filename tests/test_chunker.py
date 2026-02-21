@@ -711,6 +711,28 @@ class TestFindStaleEpistemicEntries:
         results = _find_stale_epistemic_entries(epistemic, days_threshold=90)
         assert results == []
 
+    def test_external_history_ignores_other_entry_sections(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        recent_date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E024: scoped external history (believed)\n"
+            "**Current position:** still believed.\n"
+        )
+        history_file = project / "docs" / "decisions" / "epistemic_state" / "E024.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E999: unrelated entry\n\n"
+            f"- {recent_date}: unrelated fresh update\n\n"
+            "## E024: scoped external history\n\n"
+            f"- {old_date}: stale update for target claim\n",
+        )
+        results = _find_stale_epistemic_entries(epistemic, days_threshold=90)
+        assert len(results) == 1
+        assert results[0]["id"] == "E024"
+
 
 # ------------------------------------------------------------------
 # Workflow repetition detection
