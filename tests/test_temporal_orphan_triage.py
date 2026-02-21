@@ -430,8 +430,8 @@ class TestTriagePromptTemporalContext:
         )
         assert "Temporal Context" not in output
 
-    def test_temporal_block_in_epistemic_audit(self, tmp_path: Path) -> None:
-        """Epistemic audit should include temporal context when ref_commit is provided."""
+    def test_epistemic_audit_includes_evidence_gate_instructions(self, tmp_path: Path) -> None:
+        """Epistemic audit includes temporal context and evidence gate instructions."""
         from engram.fold.prompt import render_triage_input
         from engram.fold.chunker import DriftReport
 
@@ -457,6 +457,8 @@ class TestTriagePromptTemporalContext:
         assert "2026-01-01" in output
         assert "abc123def456" in output
         assert "git worktree add /tmp/engram-epistemic-abc123de" in output
+        assert "Evidence@<commit>" in output
+        assert "Do NOT use generic lines like `reaffirmed -> believed`." in output
 
 
 # ==================================================================

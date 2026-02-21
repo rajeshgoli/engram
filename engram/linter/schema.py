@@ -8,6 +8,9 @@ concept_registry:
 
 epistemic_state:
   FULL (believed|contested|unverified) requires Evidence: or History:.
+  If a FULL believed/unverified entry includes an "Epistemic audit" history
+  marker, it must include at least one claim-specific `Evidence@<commit>` line.
+  Generic "reaffirmed -> believed" lines are invalid.
   STUB (refuted) → pointer only.
 
 workflow_registry:
@@ -57,6 +60,13 @@ WORKFLOW_STUB_RE = re.compile(
 _CODE_RE = re.compile(r'^\s*-?\s*\*?\*?Code\*?\*?:', re.MULTILINE)
 _EVIDENCE_RE = re.compile(r'^\s*-?\s*\*?\*?Evidence\*?\*?:', re.MULTILINE)
 _HISTORY_RE = re.compile(r'^\s*-?\s*\*?\*?History\*?\*?:', re.MULTILINE)
+_EVIDENCE_AT_RE = re.compile(r'^\s*-\s*Evidence@[^\s]+', re.MULTILINE)
+_AUDIT_MARKER_RE = re.compile(r'Epistemic\s+audit', re.IGNORECASE)
+_REAFFIRMED_BELIEVED_RE = re.compile(r'reaffirmed.*believed', re.IGNORECASE)
+_EPISTEMIC_STATUS_RE = re.compile(
+    r'\((believed|contested|unverified)\)\s*$',
+    re.IGNORECASE,
+)
 _CONTEXT_RE = re.compile(r'^\s*-?\s*\*?\*?Context\*?\*?:', re.MULTILINE)
 _TRIGGER_RE = re.compile(r'^\s*-?\s*\*?\*?Trigger(?:\s+for\s+change)?\*?\*?:', re.MULTILINE)
 _CURRENT_METHOD_RE = re.compile(r'^\s*-?\s*\*?\*?Current method\*?\*?:', re.MULTILINE)
@@ -187,6 +197,29 @@ def validate_epistemic_state(content: str) -> list[Violation]:
                 "epistemic", entry_id,
                 "Non-refuted epistemic entry missing required "
                 "'Evidence:' or 'History:' field",
+            ))
+
+        # Generic reaffirmation language is too weak for epistemic retention.
+        if _REAFFIRMED_BELIEVED_RE.search(body):
+            violations.append(Violation(
+                "epistemic", entry_id,
+                "Generic 'reaffirmed -> believed' history is not allowed; "
+                "use claim-specific Evidence@<commit> bullets",
+            ))
+
+        # If this entry was touched by an epistemic audit and remains
+        # believed/unverified, require claim-specific commit-pinned evidence.
+        status_match = _EPISTEMIC_STATUS_RE.search(heading)
+        status = status_match.group(1).lower() if status_match else ""
+        if (
+            status in {"believed", "unverified"}
+            and _AUDIT_MARKER_RE.search(body)
+            and not _EVIDENCE_AT_RE.search(body)
+        ):
+            violations.append(Violation(
+                "epistemic", entry_id,
+                "Epistemic-audited believed/unverified entry must include "
+                "at least one 'Evidence@<commit>' history bullet",
             ))
 
     return violations

@@ -90,9 +90,12 @@ git worktree remove /tmp/engram-epistemic-{{ ref_commit[:8] }}
 {% endif %}
 
 For each entry below:
-- **Confirm** if still valid. Keep status and add a fresh History update.
+- **Confirm** if still valid. Keep status and add claim-specific evidence from the reference commit:
+  `- Evidence@<commit> <path>:<line>: <finding> -> believed|unverified`
 - **Refute** if no longer true. Move to {{ doc_paths.epistemic_graveyard }} and replace with stub.
 - **Supersede** if the belief changed. Update to the current claim with clear evidence/history.
+- If no direct evidence exists for a retained belief, downgrade status (`believed` -> `contested|unverified`) or move to graveyard if refuted.
+- Do NOT use generic lines like `reaffirmed -> believed`.
 
 {% for e in entries %}
 - **{{ e.name }}**{% if e.id %} ({{ e.id }}){% endif %}: {{ e.days_old }} days stale (last history: {{ e.last_date }})
