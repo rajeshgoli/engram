@@ -41,6 +41,32 @@ def _parse_field_header(normalized_line: str) -> tuple[str, str] | None:
     return None
 
 
+def _is_history_boundary(
+    *,
+    stripped_line: str,
+    field: tuple[str, str] | None,
+    field_name: str | None,
+) -> bool:
+    """Return True when a line marks the end of the inline History block.
+
+    We stop on:
+    - next section heading (`## ...`)
+    - known epistemic fields
+    - any unknown bold markdown field header (`**Field:**` or `- **Field:**`)
+
+    Unknown plain `Label: ...` lines are kept as history content to avoid
+    misclassifying free-form lines like "Product Dec 11: ...".
+    """
+    if stripped_line.startswith("## "):
+        return True
+    if not field or field_name == "history":
+        return False
+    if field_name in EPISTEMIC_FIELD_NAMES:
+        return True
+    normalized = stripped_line.removeprefix("- ").strip()
+    return normalized.startswith("**")
+
+
 def infer_history_dir(epistemic_doc_path: Path) -> Path:
     """Return inferred history directory for an epistemic state doc."""
     return epistemic_doc_path.with_suffix("")
@@ -75,10 +101,11 @@ def extract_inline_history_lines(section_text: str) -> list[str]:
         if not in_history:
             continue
 
-        if stripped.startswith("## "):
-            break
-        # Stop at next recognized epistemic field.
-        if field and field_name in EPISTEMIC_FIELD_NAMES and field_name != "history":
+        if _is_history_boundary(
+            stripped_line=stripped,
+            field=field,
+            field_name=field_name,
+        ):
             break
 
         if stripped:
@@ -115,10 +142,11 @@ def remove_inline_history(section_text: str) -> tuple[str, list[str]]:
         if not in_history:
             continue
 
-        if stripped.startswith("## "):
-            end_idx = i
-            break
-        if field and field_name in EPISTEMIC_FIELD_NAMES and field_name != "history":
+        if _is_history_boundary(
+            stripped_line=stripped,
+            field=field,
+            field_name=field_name,
+        ):
             end_idx = i
             break
         extracted.append(line)

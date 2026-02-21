@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from engram.bootstrap.fold import forward_fold
+from engram.bootstrap.fold import _dispatch_and_validate, forward_fold
 from engram.bootstrap.seed import (
     _collect_repo_snapshot,
     _ensure_living_docs,
@@ -325,6 +325,53 @@ class TestForwardFold:
 
         result = forward_fold(project, date(2026, 1, 1))
         assert result is False
+
+
+class TestDispatchAndValidate:
+    @patch("engram.bootstrap.fold.lint_post_dispatch")
+    @patch("engram.bootstrap.fold.invoke_agent")
+    @patch("engram.bootstrap.fold.read_docs")
+    @patch("engram.bootstrap.fold.resolve_doc_paths")
+    def test_passes_project_root_to_linter(
+        self,
+        mock_resolve_paths: MagicMock,
+        mock_read_docs: MagicMock,
+        mock_invoke_agent: MagicMock,
+        mock_lint_post_dispatch: MagicMock,
+        project: Path,
+    ) -> None:
+        doc_paths = {
+            "timeline": project / "docs" / "decisions" / "timeline.md",
+            "concepts": project / "docs" / "decisions" / "concept_registry.md",
+            "epistemic": project / "docs" / "decisions" / "epistemic_state.md",
+            "workflows": project / "docs" / "decisions" / "workflow_registry.md",
+            "concept_graveyard": project / "docs" / "decisions" / "concept_graveyard.md",
+            "epistemic_graveyard": project / "docs" / "decisions" / "epistemic_graveyard.md",
+        }
+        mock_resolve_paths.return_value = doc_paths
+        mock_read_docs.side_effect = [
+            {"timeline": "", "concepts": "", "epistemic": "", "workflows": ""},
+            {"timeline": "", "concepts": "", "epistemic": "", "workflows": ""},
+            {"concept_graveyard": "", "epistemic_graveyard": ""},
+        ]
+        mock_invoke_agent.return_value = True
+        mock_lint_post_dispatch.return_value = MagicMock(passed=True, violations=[])
+
+        prompt_path = project / ".engram" / "chunks" / "chunk_000001_prompt.md"
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text("prompt")
+
+        chunk = MagicMock()
+        chunk.chunk_id = 1
+        chunk.prompt_path = prompt_path
+        chunk.pre_assigned_ids = {}
+        chunk.chunk_chars = 10
+
+        ok = _dispatch_and_validate(config={}, project_root=project, chunk=chunk)
+
+        assert ok is True
+        assert mock_lint_post_dispatch.call_count == 1
+        assert mock_lint_post_dispatch.call_args.kwargs["project_root"] == project
 
 
 # ------------------------------------------------------------------

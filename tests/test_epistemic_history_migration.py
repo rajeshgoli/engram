@@ -70,3 +70,29 @@ def test_bold_history_header_does_not_emit_stray_marker(tmp_path: Path) -> None:
     content = history_file.read_text()
     assert "- **" not in content
     assert "- Product Dec 12: validated" in content
+
+
+def test_unknown_bold_field_after_history_is_preserved(tmp_path: Path) -> None:
+    epistemic = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+    epistemic.parent.mkdir(parents=True, exist_ok=True)
+    epistemic.write_text(
+        "# Epistemic State\n\n"
+        "## E020: keep custom field (believed)\n"
+        "**Current position:** valid.\n"
+        "**History:**\n"
+        "- 2026-02-21: validated from timeline\n"
+        "**Custom note:** retain in main doc.\n"
+        "**Agent guidance:** continue.\n",
+    )
+
+    externalize_epistemic_history(epistemic)
+
+    updated = epistemic.read_text()
+    assert "**Custom note:** retain in main doc." in updated
+    assert "**Agent guidance:** continue." in updated
+    assert "**History:**" not in updated
+
+    history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E020.md"
+    content = history_file.read_text()
+    assert "2026-02-21: validated from timeline" in content
+    assert "Custom note" not in content
