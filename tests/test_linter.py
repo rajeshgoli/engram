@@ -225,6 +225,43 @@ Just a statement with no evidence chain.
 """
         assert validate_epistemic_state(doc) == []
 
+    def test_reaffirmed_believed_line_rejected(self) -> None:
+        doc = """\
+## E001: claim (believed)
+**History:**
+- Epistemic audit Feb 21, 2026 (a3e0b731): reaffirmed -> believed
+"""
+        violations = validate_epistemic_state(doc)
+        assert len(violations) == 2
+        assert any("reaffirmed" in v.message for v in violations)
+
+    def test_epistemic_audit_believed_requires_evidence_at(self) -> None:
+        doc = """\
+## E001: claim (believed)
+**History:**
+- Epistemic audit Feb 21, 2026 (a3e0b731): reviewed
+"""
+        violations = validate_epistemic_state(doc)
+        assert len(violations) == 1
+        assert "Evidence@<commit>" in violations[0].message
+
+    def test_epistemic_audit_believed_with_evidence_at_is_valid(self) -> None:
+        doc = """\
+## E001: claim (believed)
+**History:**
+- Epistemic audit Feb 21, 2026 (a3e0b731): reviewed
+- Evidence@a3e0b731 docs/decisions/timeline.md:42: confirmed by commit-era timeline
+"""
+        assert validate_epistemic_state(doc) == []
+
+    def test_epistemic_audit_contested_without_evidence_at_is_valid(self) -> None:
+        doc = """\
+## E001: claim (contested)
+**History:**
+- Epistemic audit Feb 21, 2026 (a3e0b731): unresolved
+"""
+        assert validate_epistemic_state(doc) == []
+
 
 # ======================================================================
 # Schema: workflow_registry

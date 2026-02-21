@@ -431,6 +431,32 @@ class TestTriagePromptTemporalContext:
         # The template only has the temporal block inside orphan_triage section
         assert "Temporal Context" not in output
 
+    def test_epistemic_audit_includes_evidence_gate_instructions(self, tmp_path: Path) -> None:
+        from engram.fold.prompt import render_triage_input
+        from engram.fold.chunker import DriftReport
+
+        drift = DriftReport(
+            epistemic_audit=[{
+                "name": "E008: Harness Phase 0 completion (believed)",
+                "id": "E008",
+                "days_old": 72,
+                "last_date": "2025-12-11",
+            }],
+        )
+        doc_paths = _fake_doc_paths(tmp_path)
+
+        output = render_triage_input(
+            drift_type="epistemic_audit",
+            drift_report=drift,
+            chunk_id=13,
+            doc_paths=doc_paths,
+            ref_commit="abc123def456789012345678901234567890abcd",
+            ref_date="2026-01-01",
+        )
+        assert "Temporal Context" in output
+        assert "Evidence@<commit>" in output
+        assert "Do NOT use generic lines like `reaffirmed -> believed`." in output
+
 
 # ==================================================================
 # 8. fold_from lifecycle — set → use → clear
