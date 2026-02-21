@@ -71,6 +71,24 @@ This is a dedicated review round for stale epistemic entries.
 These entries are marked believed/unverified, older than the audit threshold,
 and have not been referenced by recent queue items.
 
+{% if ref_commit %}
+## Temporal Context
+
+Living docs are current through **{{ ref_date }}** (commit `{{ ref_commit[:12] }}`).
+Validate each belief against code/docs at that commit, NOT today's workspace state.
+
+To inspect the project at that reference point:
+```
+git worktree add /tmp/engram-epistemic-{{ ref_commit[:8] }} {{ ref_commit }}
+```
+
+Use that worktree to verify whether claims were valid as of the fold context.
+When done:
+```
+git worktree remove /tmp/engram-epistemic-{{ ref_commit[:8] }}
+```
+{% endif %}
+
 For each entry below:
 - **Confirm** if still valid. Keep status and add a fresh History update.
 - **Refute** if no longer true. Move to {{ doc_paths.epistemic_graveyard }} and replace with stub.
