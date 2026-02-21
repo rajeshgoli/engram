@@ -52,3 +52,21 @@ def test_migration_is_noop_when_no_inline_history(tmp_path: Path) -> None:
     assert result.appended_blocks == 0
     assert epistemic.read_text() == before
 
+
+def test_bold_history_header_does_not_emit_stray_marker(tmp_path: Path) -> None:
+    epistemic = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+    epistemic.parent.mkdir(parents=True, exist_ok=True)
+    epistemic.write_text(
+        "# Epistemic State\n\n"
+        "## E015: bold header parsing (believed)\n"
+        "**Current position:** valid.\n"
+        "- **History:**\n"
+        "- Product Dec 12: validated\n"
+        "**Agent guidance:** continue.\n",
+    )
+
+    externalize_epistemic_history(epistemic)
+    history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E015.md"
+    content = history_file.read_text()
+    assert "- **" not in content
+    assert "- Product Dec 12: validated" in content

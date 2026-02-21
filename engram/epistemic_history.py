@@ -22,8 +22,23 @@ EPISTEMIC_FIELD_NAMES = {
     "superseded by",
 }
 
-# Markdown-style field header, e.g. "History:" / "**History:**" / "- **History:**"
-FIELD_HEADER_RE = re.compile(r"^(?:\*\*)?([A-Za-z][A-Za-z _/-]*?)(?:\*\*)?:\s*(.*)$")
+_FIELD_PATTERNS = [
+    # Colon inside bold markers: **History:**
+    re.compile(r"^\*\*([A-Za-z][A-Za-z _/-]*):\*\*\s*(.*)$"),
+    # Colon outside bold markers: **History**:
+    re.compile(r"^\*\*([A-Za-z][A-Za-z _/-]*)\*\*:\s*(.*)$"),
+    # Plain: History:
+    re.compile(r"^([A-Za-z][A-Za-z _/-]*):\s*(.*)$"),
+]
+
+
+def _parse_field_header(normalized_line: str) -> tuple[str, str] | None:
+    """Parse a markdown field header and return (field_name_lower, remainder)."""
+    for pat in _FIELD_PATTERNS:
+        match = pat.match(normalized_line)
+        if match:
+            return match.group(1).strip().lower(), match.group(2).strip()
+    return None
 
 
 def infer_history_dir(epistemic_doc_path: Path) -> Path:
@@ -47,12 +62,12 @@ def extract_inline_history_lines(section_text: str) -> list[str]:
     for line in section_text.splitlines():
         stripped = line.strip()
         normalized = stripped.removeprefix("- ").strip()
-        field_match = FIELD_HEADER_RE.match(normalized)
-        field_name = field_match.group(1).strip().lower() if field_match else None
+        field = _parse_field_header(normalized)
+        field_name = field[0] if field else None
 
         if field_name == "history":
             in_history = True
-            remainder = field_match.group(2).strip() if field_match else ""
+            remainder = field[1] if field else ""
             if remainder:
                 history_lines.append(remainder)
             continue
@@ -63,7 +78,7 @@ def extract_inline_history_lines(section_text: str) -> list[str]:
         if stripped.startswith("## "):
             break
         # Stop at next recognized epistemic field.
-        if field_match and field_name in EPISTEMIC_FIELD_NAMES and field_name != "history":
+        if field and field_name in EPISTEMIC_FIELD_NAMES and field_name != "history":
             break
 
         if stripped:
@@ -86,13 +101,13 @@ def remove_inline_history(section_text: str) -> tuple[str, list[str]]:
     for i, line in enumerate(lines):
         stripped = line.strip()
         normalized = stripped.removeprefix("- ").strip()
-        field_match = FIELD_HEADER_RE.match(normalized)
-        field_name = field_match.group(1).strip().lower() if field_match else None
+        field = _parse_field_header(normalized)
+        field_name = field[0] if field else None
 
         if field_name == "history" and start_idx is None:
             start_idx = i
             in_history = True
-            remainder = field_match.group(2).strip() if field_match else ""
+            remainder = field[1] if field else ""
             if remainder:
                 extracted.append(remainder)
             continue
@@ -103,7 +118,7 @@ def remove_inline_history(section_text: str) -> tuple[str, list[str]]:
         if stripped.startswith("## "):
             end_idx = i
             break
-        if field_match and field_name in EPISTEMIC_FIELD_NAMES and field_name != "history":
+        if field and field_name in EPISTEMIC_FIELD_NAMES and field_name != "history":
             end_idx = i
             break
         extracted.append(line)
@@ -129,4 +144,3 @@ def remove_inline_history(section_text: str) -> tuple[str, list[str]]:
     # Trim extracted history lines to non-empty meaningful lines.
     cleaned = [ln.rstrip() for ln in extracted if ln.strip()]
     return "\n".join(compacted), cleaned
-
