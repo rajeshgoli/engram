@@ -408,7 +408,7 @@ class TestTriagePromptTemporalContext:
         assert "git worktree add" in output
 
     def test_temporal_block_not_in_contested_review(self, tmp_path: Path) -> None:
-        """Temporal context only appears for orphan triage."""
+        """Temporal context does not appear in contested review."""
         from engram.fold.prompt import render_triage_input
         from engram.fold.chunker import DriftReport
 
@@ -428,8 +428,35 @@ class TestTriagePromptTemporalContext:
             ref_commit="abc123def456",
             ref_date="2026-01-01",
         )
-        # The template only has the temporal block inside orphan_triage section
         assert "Temporal Context" not in output
+
+    def test_temporal_block_in_epistemic_audit(self, tmp_path: Path) -> None:
+        """Epistemic audit should include temporal context when ref_commit is provided."""
+        from engram.fold.prompt import render_triage_input
+        from engram.fold.chunker import DriftReport
+
+        drift = DriftReport(
+            epistemic_audit=[{
+                "name": "E008: Harness Phase 0 completion (believed)",
+                "id": "E008",
+                "days_old": 72,
+                "last_date": "2025-12-11",
+            }],
+        )
+        doc_paths = _fake_doc_paths(tmp_path)
+
+        output = render_triage_input(
+            drift_type="epistemic_audit",
+            drift_report=drift,
+            chunk_id=13,
+            doc_paths=doc_paths,
+            ref_commit="abc123def456789012345678901234567890abcd",
+            ref_date="2026-01-01",
+        )
+        assert "Temporal Context" in output
+        assert "2026-01-01" in output
+        assert "abc123def456" in output
+        assert "git worktree add /tmp/engram-epistemic-abc123de" in output
 
 
 # ==================================================================

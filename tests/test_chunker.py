@@ -285,6 +285,38 @@ class TestExtractLatestDate:
     def test_no_dates(self):
         assert _extract_latest_date("no dates here") is None
 
+    def test_month_day_without_year_uses_nearest_past(self):
+        target = datetime.now(timezone.utc) - timedelta(days=120)
+        text = f"- Product {target.strftime('%b %d')}: evidence updated"
+        dt = _extract_latest_date(text)
+        assert dt is not None
+        assert dt <= datetime.now(timezone.utc)
+        assert (datetime.now(timezone.utc) - dt).days >= 90
+
+    def test_month_day_with_year_is_parsed(self):
+        text = "- Product Jan 05, 2025: evidence updated"
+        dt = _extract_latest_date(text)
+        assert dt is not None
+        assert dt.strftime("%Y-%m-%d") == "2025-01-05"
+
+    def test_month_day_year_without_comma_is_parsed(self):
+        text = "- Product Jan 05 2010: evidence updated"
+        dt = _extract_latest_date(text)
+        assert dt is not None
+        assert dt.strftime("%Y-%m-%d") == "2010-01-05"
+
+    def test_day_month_year_is_parsed(self):
+        text = "- Product 11 Dec, 2025: evidence updated"
+        dt = _extract_latest_date(text)
+        assert dt is not None
+        assert dt.strftime("%Y-%m-%d") == "2025-12-11"
+
+    def test_day_month_year_without_comma_is_parsed(self):
+        text = "- Product 11 Dec 2010: evidence updated"
+        dt = _extract_latest_date(text)
+        assert dt is not None
+        assert dt.strftime("%Y-%m-%d") == "2010-12-11"
+
 
 # ------------------------------------------------------------------
 # Contested / unverified claim detection
@@ -588,6 +620,38 @@ class TestFindStaleEpistemicEntries:
         )
         assert len(results) == 1
         assert results[0]["id"] == "E016"
+
+    def test_non_iso_history_date_is_stale_candidate(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_human_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%b %d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E019: harness phase 0 completion (believed)\n"
+            "**History:**\n"
+            f"- Product {old_human_date}: moved to backlog\n"
+        )
+        results = _find_stale_epistemic_entries(
+            epistemic,
+            days_threshold=90,
+        )
+        assert len(results) == 1
+        assert results[0]["id"] == "E019"
+
+    def test_history_line_with_colon_is_not_treated_as_new_field(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_human_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%b %d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E020: harness phase 0 completion (believed)\n"
+            "**History:**\n"
+            f"- Product {old_human_date}: moved to backlog\n"
+        )
+        results = _find_stale_epistemic_entries(
+            epistemic,
+            days_threshold=90,
+        )
+        assert len(results) == 1
+        assert results[0]["id"] == "E020"
 
 
 # ------------------------------------------------------------------
