@@ -8,6 +8,9 @@ concept_registry:
 
 epistemic_state:
   FULL (believed|contested|unverified) requires Evidence: or History:.
+  If a FULL believed/unverified entry includes an "Epistemic audit" history
+  marker, it must include at least one claim-specific `Evidence@<commit>` line.
+  Generic "reaffirmed -> believed" lines are invalid.
   STUB (refuted) → pointer only.
 
 workflow_registry:
@@ -18,7 +21,9 @@ workflow_registry:
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
+from engram.epistemic_history import extract_external_history_for_entry, infer_history_path
 from engram.parse import Section, extract_id, is_stub, parse_sections
 
 
@@ -53,10 +58,27 @@ WORKFLOW_STUB_RE = re.compile(
     r'^##\s+W\d{3,}:\s+.+\((?:SUPERSEDED|MERGED)[^)]*\)\s*→\s*\S+'
 )
 
+# Legacy compacted headings (no stable ID) should not remain in living docs.
+LEGACY_COMPACTED_DEAD_RE = re.compile(
+    r'^##\s+.+\(\s*DEAD\s*\)\s+—\s+\*compacted\*\s*$',
+    re.IGNORECASE,
+)
+LEGACY_COMPACTED_REFUTED_RE = re.compile(
+    r'^##\s+.+\(\s*REFUTED\s*\)\s+—\s+\*compacted\*\s*$',
+    re.IGNORECASE,
+)
+
 # Required field patterns (bold markdown fields inside a section body)
 _CODE_RE = re.compile(r'^\s*-?\s*\*?\*?Code\*?\*?:', re.MULTILINE)
 _EVIDENCE_RE = re.compile(r'^\s*-?\s*\*?\*?Evidence\*?\*?:', re.MULTILINE)
 _HISTORY_RE = re.compile(r'^\s*-?\s*\*?\*?History\*?\*?:', re.MULTILINE)
+_EVIDENCE_AT_RE = re.compile(r'^\s*-\s*Evidence@[^\s]+', re.MULTILINE)
+_AUDIT_MARKER_RE = re.compile(r'Epistemic\s+audit', re.IGNORECASE)
+_REAFFIRMED_BELIEVED_RE = re.compile(r'reaffirmed.*believed', re.IGNORECASE)
+_EPISTEMIC_STATUS_RE = re.compile(
+    r'\((believed|contested|unverified)\)\s*$',
+    re.IGNORECASE,
+)
 _CONTEXT_RE = re.compile(r'^\s*-?\s*\*?\*?Context\*?\*?:', re.MULTILINE)
 _TRIGGER_RE = re.compile(r'^\s*-?\s*\*?\*?Trigger(?:\s+for\s+change)?\*?\*?:', re.MULTILINE)
 _CURRENT_METHOD_RE = re.compile(r'^\s*-?\s*\*?\*?Current method\*?\*?:', re.MULTILINE)
@@ -100,6 +122,14 @@ def validate_concept_registry(content: str) -> list[Violation]:
         heading = section["heading"]
         entry_id = extract_id(heading)
 
+        if not entry_id and LEGACY_COMPACTED_DEAD_RE.match(heading):
+            violations.append(Violation(
+                "concepts", None,
+                "Legacy compacted DEAD heading found in living concept doc; "
+                "move it fully to concept_graveyard.md",
+            ))
+            continue
+
         if not entry_id:
             continue  # preamble or non-entry section
 
@@ -142,7 +172,7 @@ def validate_concept_registry(content: str) -> list[Violation]:
     return violations
 
 
-def validate_epistemic_state(content: str) -> list[Violation]:
+def validate_epistemic_state(content: str, epistemic_path: Path | None = None) -> list[Violation]:
     """Validate epistemic_state.md schema rules."""
     violations: list[Violation] = []
     sections = parse_sections(content)
@@ -150,6 +180,14 @@ def validate_epistemic_state(content: str) -> list[Violation]:
     for section in sections:
         heading = section["heading"]
         entry_id = extract_id(heading)
+
+        if not entry_id and LEGACY_COMPACTED_REFUTED_RE.match(heading):
+            violations.append(Violation(
+                "epistemic", None,
+                "Legacy compacted REFUTED heading found in living epistemic doc; "
+                "move it fully to epistemic_graveyard.md",
+            ))
+            continue
 
         if not entry_id:
             continue
@@ -180,13 +218,70 @@ def validate_epistemic_state(content: str) -> list[Violation]:
             ))
             continue
 
-        # FULL requires Evidence: or History:
+        # FULL requires Evidence/History inline OR inferred external history file.
         body = section["text"]
-        if not _EVIDENCE_RE.search(body) and not _HISTORY_RE.search(body):
+        has_inline = bool(_EVIDENCE_RE.search(body) or _HISTORY_RE.search(body))
+        history_sources = [body]
+        history_path = infer_history_path(epistemic_path, entry_id) if epistemic_path else None
+
+        if not has_inline and history_path is None:
             violations.append(Violation(
                 "epistemic", entry_id,
                 "Non-refuted epistemic entry missing required "
                 "'Evidence:' or 'History:' field",
+            ))
+            continue
+
+        if history_path and history_path.exists():
+            try:
+                external_history = history_path.read_text()
+            except OSError:
+                violations.append(Violation(
+                    "epistemic", entry_id,
+                    f"Could not read inferred history file: {history_path}",
+                ))
+                continue
+
+            scoped_external_history = extract_external_history_for_entry(external_history, entry_id)
+            if not scoped_external_history:
+                violations.append(Violation(
+                    "epistemic", entry_id,
+                    f"Inferred history file does not contain matching heading for {entry_id}: "
+                    f"{history_path}",
+                ))
+            else:
+                history_sources.append(scoped_external_history)
+        elif not has_inline:
+            violations.append(Violation(
+                "epistemic", entry_id,
+                "Missing inline 'Evidence:'/'History:' and inferred history file "
+                f"not found: {history_path}",
+            ))
+            continue
+
+        history_source_text = "\n".join(history_sources)
+
+        # Generic reaffirmation language is too weak for epistemic retention.
+        if _REAFFIRMED_BELIEVED_RE.search(history_source_text):
+            violations.append(Violation(
+                "epistemic", entry_id,
+                "Generic 'reaffirmed -> believed' history is not allowed; "
+                "use claim-specific Evidence@<commit> bullets",
+            ))
+
+        # If this entry was touched by an epistemic audit and remains
+        # believed/unverified, require claim-specific commit-pinned evidence.
+        status_match = _EPISTEMIC_STATUS_RE.search(heading)
+        status = status_match.group(1).lower() if status_match else ""
+        if (
+            status in {"believed", "unverified"}
+            and _AUDIT_MARKER_RE.search(history_source_text)
+            and not _EVIDENCE_AT_RE.search(history_source_text)
+        ):
+            violations.append(Violation(
+                "epistemic", entry_id,
+                "Epistemic-audited believed/unverified entry must include "
+                "at least one 'Evidence@<commit>' history bullet",
             ))
 
     return violations

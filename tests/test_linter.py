@@ -160,6 +160,12 @@ class TestConceptRegistrySchema:
             violations = validate_concept_registry(doc)
             assert violations == [], f"Failed for format: {fmt}"
 
+    def test_legacy_compacted_dead_heading_rejected(self) -> None:
+        doc = "## data_loader (DEAD) — *compacted*\n"
+        violations = validate_concept_registry(doc)
+        assert len(violations) == 1
+        assert "Legacy compacted DEAD heading" in violations[0].message
+
 
 # ======================================================================
 # Schema: epistemic_state
@@ -224,6 +230,170 @@ Just a statement with no evidence chain.
 **Evidence:** data
 """
         assert validate_epistemic_state(doc) == []
+
+    def test_reaffirmed_believed_line_rejected(self) -> None:
+        doc = """\
+## E001: claim (believed)
+**History:**
+- Epistemic audit Feb 21, 2026 (a3e0b731): reaffirmed -> believed
+"""
+        violations = validate_epistemic_state(doc)
+        assert len(violations) == 2
+        assert any("reaffirmed" in v.message for v in violations)
+
+    def test_epistemic_audit_believed_requires_evidence_at(self) -> None:
+        doc = """\
+## E001: claim (believed)
+**History:**
+- Epistemic audit Feb 21, 2026 (a3e0b731): reviewed
+"""
+        violations = validate_epistemic_state(doc)
+        assert len(violations) == 1
+        assert "Evidence@<commit>" in violations[0].message
+
+    def test_epistemic_audit_believed_with_evidence_at_is_valid(self) -> None:
+        doc = """\
+## E001: claim (believed)
+**History:**
+- Epistemic audit Feb 21, 2026 (a3e0b731): reviewed
+- Evidence@a3e0b731 docs/decisions/timeline.md:42: confirmed by commit-era timeline
+"""
+        assert validate_epistemic_state(doc) == []
+
+    def test_epistemic_audit_contested_without_evidence_at_is_valid(self) -> None:
+        doc = """\
+## E001: claim (contested)
+**History:**
+- Epistemic audit Feb 21, 2026 (a3e0b731): unresolved
+"""
+        assert validate_epistemic_state(doc) == []
+
+    def test_legacy_compacted_refuted_heading_rejected(self) -> None:
+        doc = "## Duplicate swings (REFUTED) — *compacted*\n"
+        violations = validate_epistemic_state(doc)
+        assert len(violations) == 1
+        assert "Legacy compacted REFUTED heading" in violations[0].message
+
+    def test_valid_with_inferred_external_history_file(self, tmp_path: Path) -> None:
+        doc = """\
+## E005: externalized claim (believed)
+**Current position:** still believed.
+**Agent guidance:** keep monitoring.
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E005.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E005: externalized claim\n\n"
+            "- 2026-02-21: reviewed\n",
+        )
+        assert validate_epistemic_state(doc, epistemic_path=epistemic_path) == []
+
+    def test_missing_inline_and_inferred_history_file_is_violation(self, tmp_path: Path) -> None:
+        doc = """\
+## E006: externalized claim missing file (believed)
+**Current position:** still believed.
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        violations = validate_epistemic_state(doc, epistemic_path=epistemic_path)
+        assert len(violations) == 1
+        assert "inferred history file not found" in violations[0].message
+
+    def test_inferred_history_file_must_match_entry_id(self, tmp_path: Path) -> None:
+        doc = """\
+## E007: mismatched history id (believed)
+**Current position:** still believed.
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E007.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E999: wrong id\n",
+        )
+        violations = validate_epistemic_state(doc, epistemic_path=epistemic_path)
+        assert len(violations) == 1
+        assert "matching heading for E007" in violations[0].message
+
+    def test_external_audit_requires_evidence_at_even_with_inline_evidence(
+        self, tmp_path: Path,
+    ) -> None:
+        doc = """\
+## E008: mixed history sources (believed)
+**Evidence:** carried over from prior draft
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E008.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E008: mixed history sources\n\n"
+            "- Epistemic audit Feb 21, 2026 (a3e0b731): reviewed\n",
+        )
+        violations = validate_epistemic_state(doc, epistemic_path=epistemic_path)
+        assert len(violations) == 1
+        assert "Evidence@<commit>" in violations[0].message
+
+    def test_reaffirmed_in_external_history_rejected_even_with_inline_evidence(
+        self, tmp_path: Path,
+    ) -> None:
+        doc = """\
+## E009: mixed history sources (believed)
+**Evidence:** carried over from prior draft
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E009.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E009: mixed history sources\n\n"
+            "- Epistemic audit Feb 21, 2026 (a3e0b731): reaffirmed -> believed\n",
+        )
+        violations = validate_epistemic_state(doc, epistemic_path=epistemic_path)
+        assert len(violations) == 2
+        assert any("reaffirmed" in v.message for v in violations)
+
+    def test_external_history_requires_evidence_at_in_matching_entry_only(
+        self, tmp_path: Path,
+    ) -> None:
+        doc = """\
+## E010: mixed history sources (believed)
+**Current position:** still believed.
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E010.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E010: mixed history sources\n\n"
+            "- Epistemic audit Feb 21, 2026 (a3e0b731): reviewed\n\n"
+            "## E999: unrelated entry\n\n"
+            "- Evidence@a3e0b731 docs/decisions/timeline.md:42: unrelated -> believed\n",
+        )
+        violations = validate_epistemic_state(doc, epistemic_path=epistemic_path)
+        assert len(violations) == 1
+        assert "Evidence@<commit>" in violations[0].message
+
+    def test_external_history_reaffirmed_in_other_entry_is_ignored(
+        self, tmp_path: Path,
+    ) -> None:
+        doc = """\
+## E011: mixed history sources (believed)
+**Current position:** still believed.
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E011.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E011: mixed history sources\n\n"
+            "- Epistemic audit Feb 21, 2026 (a3e0b731): reviewed\n"
+            "- Evidence@a3e0b731 docs/decisions/timeline.md:42: confirmed -> believed\n\n"
+            "## E999: unrelated entry\n\n"
+            "- Epistemic audit Feb 21, 2026 (a3e0b731): reaffirmed -> believed\n",
+        )
+        assert validate_epistemic_state(doc, epistemic_path=epistemic_path) == []
 
 
 # ======================================================================

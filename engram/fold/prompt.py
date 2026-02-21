@@ -8,6 +8,8 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader
 
+from engram.epistemic_history import infer_history_dir
+
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 
@@ -33,6 +35,11 @@ def _stringify_paths(doc_paths: dict[str, Path]) -> dict[str, str]:
     return {k: str(v) for k, v in doc_paths.items()}
 
 
+def _epistemic_history_dir_str(doc_paths: dict[str, Path]) -> str:
+    """Infer history directory path for epistemic per-ID history files."""
+    return str(infer_history_dir(doc_paths["epistemic"]))
+
+
 def render_chunk_input(
     *,
     chunk_id: int,
@@ -52,6 +59,7 @@ def render_chunk_input(
 
     instructions = template.render(
         doc_paths=_stringify_paths(doc_paths),
+        epistemic_history_dir=_epistemic_history_dir_str(doc_paths),
         pre_assigned_ids=pre_assigned_ids,
     )
 
@@ -109,6 +117,7 @@ def render_triage_input(
         entries=entries,
         chunk_id=chunk_id,
         doc_paths=_stringify_paths(doc_paths),
+        epistemic_history_dir=_epistemic_history_dir_str(doc_paths),
         entry_count=len(entries),
         ref_commit=ref_commit,
         ref_date=ref_date,
@@ -142,6 +151,7 @@ def render_agent_prompt(
         if project_root
         else "engram lint --project-root <project_root>"
     )
+    epistemic_history_dir = _epistemic_history_dir_str(doc_paths)
 
     return (
         f"You are processing a knowledge fold chunk.\n"
@@ -150,6 +160,8 @@ def render_agent_prompt(
         f"- Do NOT use the Task tool or spawn sub-agents. Do all work directly.\n"
         f"- Do NOT use Write to overwrite entire files. Use Edit for surgical updates only.\n"
         f"- Be SUCCINCT. High information density, no filler, no narrative prose.\n"
+        f"- Do NOT read per-ID epistemic history files under {epistemic_history_dir}/E*.md.\n"
+        f"  They are append-only logs; when needed, append via Bash without opening them.\n"
         f"\n"
         f"Read the input file at {input_path.resolve()} — it contains system instructions\n"
         f"and new content covering {date_range}.\n"

@@ -43,9 +43,8 @@ All required fields must be present.
 
     ## E{NNN}: {name} (believed|contested|unverified)
     **Current position:** 1-2 sentences.
-    **History:**
-    - #issue: "claim" → status
     **Agent guidance:** 1 sentence only.
+    [Optional inline **History:** is allowed, but prefer external per-ID history file.]
 
 **Workflow registry:**
 
@@ -98,6 +97,8 @@ Graveyard files are append-only. Never edit existing graveyard entries.
 - Workflow registry: structured fields only. Context + trigger/method.
 - DEAD/refuted entries: 1-2 sentences max. Key lesson + replacement.
 - **Budget matters.** Every line stays in context for future chunks. Be ruthless about cutting words.
+- For epistemic entries, keep the main file concise. Store detailed append-only history in inferred files:
+  `{{ epistemic_history_dir }}/E{NNN}.md` (derive from entry ID; do NOT add a `History file:` field).
 
 ## Important
 

@@ -313,6 +313,43 @@ def migrate(project_root: str, fold_from: object) -> None:
         raise SystemExit(1)
 
 
+@cli.command("migrate-epistemic-history")
+@click.option(
+    "--project-root",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    default=".",
+    help="Project root directory (default: cwd).",
+)
+def migrate_epistemic_history(project_root: str) -> None:
+    """Externalize inline epistemic History blocks into inferred per-ID files."""
+    from engram.config import load_config, resolve_doc_paths
+    from engram.migrate_epistemic_history import externalize_epistemic_history
+
+    root = Path(project_root)
+    config = load_config(root)
+    doc_paths = resolve_doc_paths(config, root)
+    epistemic_path = doc_paths["epistemic"]
+
+    result = externalize_epistemic_history(epistemic_path)
+    click.echo("Epistemic history migration complete.")
+    click.echo(f"  Migrated entries: {result.migrated_entries}")
+    click.echo(f"  Created files: {result.created_files}")
+    click.echo(f"  Appended blocks: {result.appended_blocks}")
+
+    from engram.linter import lint_from_paths
+    lint_result = lint_from_paths(root, config)
+    if lint_result.passed:
+        click.echo("  Lint: PASS (0 violations)")
+    else:
+        click.echo(f"  Lint: FAIL ({len(lint_result.violations)} violations)")
+        for v in lint_result.violations:
+            loc = v.doc_type
+            if v.entry_id:
+                loc += f"/{v.entry_id}"
+            click.echo(f"    [{loc}] {v.message}")
+        raise SystemExit(1)
+
+
 @cli.command()
 @click.option(
     "--project-root",

@@ -83,6 +83,7 @@ def _dispatch_and_validate(
             pre_assigned_ids=pre_assigned if pre_assigned else None,
             expected_growth=chunk.chunk_chars,
             config=config,
+            project_root=project_root,
         )
 
         if result.passed:
