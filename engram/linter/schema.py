@@ -221,45 +221,44 @@ def validate_epistemic_state(content: str, epistemic_path: Path | None = None) -
         # FULL requires Evidence/History inline OR inferred external history file.
         body = section["text"]
         has_inline = bool(_EVIDENCE_RE.search(body) or _HISTORY_RE.search(body))
-        if has_inline:
-            continue
+        history_source_text = body
+        if not has_inline:
+            if epistemic_path is None:
+                violations.append(Violation(
+                    "epistemic", entry_id,
+                    "Non-refuted epistemic entry missing required "
+                    "'Evidence:' or 'History:' field",
+                ))
+                continue
 
-        if epistemic_path is None:
-            violations.append(Violation(
-                "epistemic", entry_id,
-                "Non-refuted epistemic entry missing required "
-                "'Evidence:' or 'History:' field",
-            ))
-            continue
+            history_path = infer_history_path(epistemic_path, entry_id)
+            if not history_path.exists():
+                violations.append(Violation(
+                    "epistemic", entry_id,
+                    "Missing inline 'Evidence:'/'History:' and inferred history file "
+                    f"not found: {history_path}",
+                ))
+                continue
 
-        history_path = infer_history_path(epistemic_path, entry_id)
-        if not history_path.exists():
-            violations.append(Violation(
-                "epistemic", entry_id,
-                "Missing inline 'Evidence:'/'History:' and inferred history file "
-                f"not found: {history_path}",
-            ))
-            continue
+            try:
+                history_source_text = history_path.read_text()
+            except OSError:
+                violations.append(Violation(
+                    "epistemic", entry_id,
+                    f"Could not read inferred history file: {history_path}",
+                ))
+                continue
 
-        try:
-            history_text = history_path.read_text()
-        except OSError:
-            violations.append(Violation(
-                "epistemic", entry_id,
-                f"Could not read inferred history file: {history_path}",
-            ))
-            continue
-
-        # Basic ID integrity guard: history file must contain a heading for this ID.
-        if not re.search(rf"^##\s+{re.escape(entry_id)}\b", history_text, re.MULTILINE):
-            violations.append(Violation(
-                "epistemic", entry_id,
-                f"Inferred history file does not contain matching heading for {entry_id}: "
-                f"{history_path}",
-            ))
+            # Basic ID integrity guard: history file must contain a heading for this ID.
+            if not re.search(rf"^##\s+{re.escape(entry_id)}\b", history_source_text, re.MULTILINE):
+                violations.append(Violation(
+                    "epistemic", entry_id,
+                    f"Inferred history file does not contain matching heading for {entry_id}: "
+                    f"{history_path}",
+                ))
 
         # Generic reaffirmation language is too weak for epistemic retention.
-        if _REAFFIRMED_BELIEVED_RE.search(body):
+        if _REAFFIRMED_BELIEVED_RE.search(history_source_text):
             violations.append(Violation(
                 "epistemic", entry_id,
                 "Generic 'reaffirmed -> believed' history is not allowed; "
@@ -272,8 +271,8 @@ def validate_epistemic_state(content: str, epistemic_path: Path | None = None) -
         status = status_match.group(1).lower() if status_match else ""
         if (
             status in {"believed", "unverified"}
-            and _AUDIT_MARKER_RE.search(body)
-            and not _EVIDENCE_AT_RE.search(body)
+            and _AUDIT_MARKER_RE.search(history_source_text)
+            and not _EVIDENCE_AT_RE.search(history_source_text)
         ):
             violations.append(Violation(
                 "epistemic", entry_id,
