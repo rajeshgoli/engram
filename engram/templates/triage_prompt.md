@@ -99,6 +99,9 @@ For each entry below:
 - Do NOT use generic lines like `reaffirmed -> believed`.
 
 Do not add a `History file:` line in main epistemic entries. History file path is inferred from ID.
+Do not read per-ID history files (`{{ epistemic_history_dir }}/E*.md`) during audit.
+Treat them as append-only logs: decide from main living docs + temporal worktree evidence,
+then append one concise bullet via Bash per retained claim.
 
 {% for e in entries %}
 - **{{ e.name }}**{% if e.id %} ({{ e.id }}){% endif %}: {{ e.days_old }} days stale (last history: {{ e.last_date }})

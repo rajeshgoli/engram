@@ -151,6 +151,7 @@ def render_agent_prompt(
         if project_root
         else "engram lint --project-root <project_root>"
     )
+    epistemic_history_dir = _epistemic_history_dir_str(doc_paths)
 
     return (
         f"You are processing a knowledge fold chunk.\n"
@@ -159,6 +160,8 @@ def render_agent_prompt(
         f"- Do NOT use the Task tool or spawn sub-agents. Do all work directly.\n"
         f"- Do NOT use Write to overwrite entire files. Use Edit for surgical updates only.\n"
         f"- Be SUCCINCT. High information density, no filler, no narrative prose.\n"
+        f"- Do NOT read per-ID epistemic history files under {epistemic_history_dir}/E*.md.\n"
+        f"  They are append-only logs; when needed, append via Bash without opening them.\n"
         f"\n"
         f"Read the input file at {input_path.resolve()} — it contains system instructions\n"
         f"and new content covering {date_range}.\n"
