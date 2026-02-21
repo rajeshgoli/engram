@@ -50,6 +50,7 @@ DEFAULTS: dict[str, Any] = {
 
 REQUIRED_LIVING_DOC_KEYS = {"timeline", "concepts", "epistemic", "workflows"}
 REQUIRED_GRAVEYARD_KEYS = {"concepts", "epistemic"}
+BUILTIN_SESSION_FORMATS = ("claude-code", "codex")
 
 
 class ConfigError(Exception):
@@ -85,10 +86,39 @@ def _validate(config: dict) -> None:
 
     sessions = config.get("sources", {}).get("sessions", {})
     fmt = sessions.get("format", "claude-code")
-    if fmt not in ("claude-code",):
+    if fmt not in BUILTIN_SESSION_FORMATS:
         raise ConfigError(
-            f"Unsupported session format '{fmt}'. Built-in: claude-code."
+            f"Unsupported session format '{fmt}'. Built-in: "
+            f"{', '.join(BUILTIN_SESSION_FORMATS)}."
         )
+
+
+def _apply_session_path_defaults(config: dict) -> dict:
+    """Apply format-aware default path for session history source."""
+    sources = config.get("sources")
+    if not isinstance(sources, dict):
+        return config
+    sessions = sources.get("sessions")
+    if not isinstance(sessions, dict):
+        return config
+
+    fmt = sessions.get("format", "claude-code")
+    desired_default = (
+        "~/.codex/history.jsonl" if fmt == "codex" else "~/.claude/history.jsonl"
+    )
+    current_path = sessions.get("path")
+    if current_path not in ("~/.claude/history.jsonl", "~/.codex/history.jsonl", None, ""):
+        return config
+    if current_path == desired_default:
+        return config
+
+    merged_sessions = dict(sessions)
+    merged_sessions["path"] = desired_default
+    merged_sources = dict(sources)
+    merged_sources["sessions"] = merged_sessions
+    merged_config = dict(config)
+    merged_config["sources"] = merged_sources
+    return merged_config
 
 
 def load_config(project_root: Path | None = None) -> dict:
@@ -110,6 +140,7 @@ def load_config(project_root: Path | None = None) -> dict:
         raise ConfigError(f"Config must be a YAML mapping, got {type(raw).__name__}")
 
     config = _deep_merge(DEFAULTS, raw)
+    config = _apply_session_path_defaults(config)
     _validate(config)
     return config
 

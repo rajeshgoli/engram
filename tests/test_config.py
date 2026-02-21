@@ -95,6 +95,12 @@ class TestValidate:
         })
         _validate(config)  # Should not raise
 
+    def test_codex_format_accepted(self) -> None:
+        config = _deep_merge(DEFAULTS, {
+            "sources": {"sessions": {"format": "codex"}}
+        })
+        _validate(config)  # Should not raise
+
 
 class TestLoadConfig:
     def test_loads_and_merges_defaults(self, project_dir: Path) -> None:
@@ -106,6 +112,30 @@ class TestLoadConfig:
         assert config["budget"]["context_limit_chars"] == 600_000
         assert config["thresholds"]["orphan_triage"] == 50
         assert config["thresholds"]["stale_epistemic_days"] == 90
+
+    def test_codex_format_gets_codex_default_path(self, tmp_path: Path) -> None:
+        engram_dir = tmp_path / ".engram"
+        engram_dir.mkdir()
+        config = {
+            "living_docs": {
+                "timeline": "docs/timeline.md",
+                "concepts": "docs/concept_registry.md",
+                "epistemic": "docs/epistemic_state.md",
+                "workflows": "docs/workflow_registry.md",
+            },
+            "graveyard": {
+                "concepts": "docs/concept_graveyard.md",
+                "epistemic": "docs/epistemic_graveyard.md",
+            },
+            "sources": {
+                "sessions": {"format": "codex"},
+            },
+        }
+        (engram_dir / "config.yaml").write_text(yaml.dump(config))
+
+        loaded = load_config(tmp_path)
+        assert loaded["sources"]["sessions"]["format"] == "codex"
+        assert loaded["sources"]["sessions"]["path"] == "~/.codex/history.jsonl"
 
     def test_missing_config_file(self, tmp_path: Path) -> None:
         with pytest.raises(ConfigError, match="Config not found"):

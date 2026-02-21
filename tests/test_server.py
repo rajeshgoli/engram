@@ -270,6 +270,15 @@ class TestServerState:
         state = db.get_server_state()
         assert state["last_session_mtime"] == 1234567890.5
 
+    def test_session_offset_and_tree_mtime(self, db: ServerDB) -> None:
+        db.update_server_state(
+            last_session_offset=2048,
+            last_session_tree_mtime=1234567891.25,
+        )
+        state = db.get_server_state()
+        assert state["last_session_offset"] == 2048
+        assert state["last_session_tree_mtime"] == 1234567891.25
+
 
 class TestCrashRecovery:
     def test_building_dispatches_discarded(self, db: ServerDB) -> None:
@@ -463,6 +472,131 @@ class TestSessionPoller:
 
         poller = SessionPoller(config, cb)
         assert poller.poll() == 0
+
+    def test_poll_only_emits_appended_entries(self, tmp_path: Path) -> None:
+        from engram.server.watcher import SessionPoller
+
+        history = tmp_path / "history.jsonl"
+        first = {
+            "sessionId": "sess1",
+            "project": "/path/to/my-project",
+            "display": "This is a long enough prompt for initial poll event",
+            "timestamp": int(time.time() * 1000),
+        }
+        history.write_text(json.dumps(first) + "\n")
+
+        config = {
+            "sources": {
+                "sessions": {
+                    "format": "claude-code",
+                    "path": str(history),
+                    "project_match": ["my-project"],
+                }
+            }
+        }
+
+        received: list[str] = []
+
+        def cb(path, typ, chars, date, meta):
+            received.append(path)
+
+        poller = SessionPoller(config, cb)
+        assert poller.poll() == 1
+        assert poller.poll() == 0
+
+        second = {
+            "sessionId": "sess2",
+            "project": "/path/to/my-project",
+            "display": "This appended prompt should be emitted exactly once",
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(history, "a") as fh:
+            fh.write(json.dumps(second) + "\n")
+
+        assert poller.poll() == 1
+        assert received.count(".engram/sessions/sess2.md") == 1
+
+    def test_poll_writes_session_markdown_when_project_root_set(self, tmp_path: Path) -> None:
+        from engram.server.watcher import SessionPoller
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        history = tmp_path / "history.jsonl"
+        history.write_text(json.dumps({
+            "sessionId": "sess1",
+            "project": "/path/to/my-project",
+            "display": "This is a long enough prompt for markdown session output",
+            "timestamp": int(time.time() * 1000),
+        }) + "\n")
+
+        config = {
+            "sources": {
+                "sessions": {
+                    "format": "claude-code",
+                    "path": str(history),
+                    "project_match": ["my-project"],
+                }
+            }
+        }
+
+        received: list[tuple] = []
+
+        def cb(path, typ, chars, date, meta):
+            received.append((path, typ, chars, meta))
+
+        poller = SessionPoller(config, cb, project_root=project_root)
+        assert poller.poll() == 1
+
+        session_file = project_root / ".engram" / "sessions" / "sess1.md"
+        assert session_file.exists()
+        assert "long enough prompt" in session_file.read_text()
+        assert received[0][0] == ".engram/sessions/sess1.md"
+        assert received[0][2] == session_file.stat().st_size
+
+    def test_codex_tree_change_can_unlock_project_match(self, tmp_path: Path) -> None:
+        from engram.server.watcher import SessionPoller
+
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir(parents=True)
+        history = codex_home / "history.jsonl"
+        history.write_text(json.dumps({
+            "session_id": "11111111-1111-1111-1111-111111111111",
+            "ts": 1771641000,
+            "text": "Codex prompt long enough to pass filtering constraints",
+        }) + "\n")
+
+        config = {
+            "sources": {
+                "sessions": {
+                    "format": "codex",
+                    "path": str(history),
+                    "project_match": ["my-project"],
+                }
+            }
+        }
+
+        received: list[str] = []
+
+        def cb(path, typ, chars, date, meta):
+            received.append(path)
+
+        poller = SessionPoller(config, cb)
+        assert poller.poll() == 0  # No codex session cwd metadata yet.
+
+        sessions_dir = codex_home / "sessions" / "2026" / "02" / "21"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        (sessions_dir / "rollout-2026-02-21-11111111-1111-1111-1111-111111111111.jsonl").write_text(
+            json.dumps({
+                "type": "session_meta",
+                "payload": {
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "cwd": "/Users/dev/my-project",
+                },
+            }) + "\n",
+        )
+
+        assert poller.poll() == 1
+        assert received == [".engram/sessions/11111111-1111-1111-1111-111111111111.md"]
 
 
 class TestGitPoller:
@@ -687,6 +821,68 @@ class TestDispatcherHelpers:
         text = _build_correction_text_from_lint(result)
         assert "CORRECTION REQUIRED" in text
         assert "Missing Evidence:" in text
+
+    def test_flush_buffer_to_queue_consumes_and_writes_entries(
+        self,
+        project: Path,
+        config: dict,
+    ) -> None:
+        from engram.server.dispatcher import Dispatcher
+
+        db = ServerDB(project / ".engram" / "engram.db")
+        dispatcher = Dispatcher(config, project, db)
+
+        db.add_buffer_item("docs/working/live.md", "doc", 120, "2026-02-21T10:00:00Z")
+
+        issue_dir = project / "local_data" / "issues"
+        issue_dir.mkdir(parents=True, exist_ok=True)
+        (issue_dir / "77.json").write_text(json.dumps({
+            "number": 77,
+            "title": "Live issue title",
+            "body": "Body",
+        }))
+        db.add_buffer_item("local_data/issues/77.json", "issue", 40, "2026-02-21T10:01:00Z")
+
+        session_dir = project / ".engram" / "sessions"
+        session_dir.mkdir(parents=True, exist_ok=True)
+        (session_dir / "sess-1.md").write_text("prompt text")
+        db.add_buffer_item(
+            ".engram/sessions/sess-1.md",
+            "prompts",
+            11,
+            "2026-02-21T10:02:00Z",
+            metadata=json.dumps({"prompt_count": 3}),
+        )
+
+        added = dispatcher._flush_buffer_to_queue()
+        assert added == 3
+        assert db.get_buffer_items() == []
+
+        queue_file = project / ".engram" / "queue.jsonl"
+        rows = [json.loads(line) for line in queue_file.read_text().splitlines() if line.strip()]
+        by_type = {row["type"]: row for row in rows}
+        assert by_type["doc"]["path"] == "docs/working/live.md"
+        assert by_type["doc"]["pass"] == "revisit"
+        assert by_type["issue"]["issue_number"] == 77
+        assert by_type["issue"]["issue_title"] == "Live issue title"
+        assert by_type["prompts"]["session_id"] == "sess-1"
+        assert by_type["prompts"]["prompt_count"] == 3
+
+    def test_dispatch_calls_buffer_flush_before_chunk_build(
+        self,
+        project: Path,
+        config: dict,
+    ) -> None:
+        from engram.server.dispatcher import Dispatcher
+
+        db = ServerDB(project / ".engram" / "engram.db")
+        dispatcher = Dispatcher(config, project, db)
+
+        with patch.object(dispatcher, "_flush_buffer_to_queue", return_value=0) as mock_flush:
+            with patch("engram.server.dispatcher.next_chunk", side_effect=ValueError("Queue is empty")):
+                assert dispatcher.dispatch() is False
+
+        mock_flush.assert_called_once()
 
 
 class TestDispatcherRecovery:

@@ -73,8 +73,8 @@ sources:
     - docs/archive/
     - docs/specs/
   sessions:
-    format: claude-code
-    path: ~/.claude/history.jsonl
+    format: claude-code  # Built-in: claude-code, codex
+    path: ~/.claude/history.jsonl  # codex default: ~/.codex/history.jsonl
     project_match: []
 
 thresholds:

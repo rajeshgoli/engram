@@ -78,7 +78,7 @@ def run_server(config: dict[str, Any], project_root: Path) -> None:
 
     source_dirs = config.get("sources", {}).get("docs", [])
     git_poller = GitPoller(project_root, on_change, source_dirs)
-    session_poller = SessionPoller(config, on_change)
+    session_poller = SessionPoller(config, on_change, project_root=project_root)
 
     # Restore polling bookmarks from DB
     state = db.get_server_state()
@@ -86,6 +86,10 @@ def run_server(config: dict[str, Any], project_root: Path) -> None:
         git_poller.set_last_commit(state["last_poll_commit"])
     if state.get("last_session_mtime"):
         session_poller.set_last_mtime(state["last_session_mtime"])
+    if state.get("last_session_offset") is not None:
+        session_poller.set_last_offset(state["last_session_offset"])
+    if state.get("last_session_tree_mtime") is not None:
+        session_poller.set_last_tree_mtime(state["last_session_tree_mtime"])
 
     # --- Signal handling ---
     running = True
@@ -118,9 +122,13 @@ def run_server(config: dict[str, Any], project_root: Path) -> None:
             new_sessions = session_poller.poll()
             if new_sessions:
                 log.info("Sessions: %d new entry/entries", new_sessions)
-                mtime = session_poller.get_last_mtime()
-                if mtime is not None:
-                    db.update_server_state(last_session_mtime=mtime)
+            mtime = session_poller.get_last_mtime()
+            if mtime is not None:
+                db.update_server_state(
+                    last_session_mtime=mtime,
+                    last_session_offset=session_poller.get_last_offset(),
+                    last_session_tree_mtime=session_poller.get_last_tree_mtime(),
+                )
 
             # Check dispatch readiness
             reason = buffer.should_dispatch()
