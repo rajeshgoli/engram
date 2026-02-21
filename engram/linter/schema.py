@@ -56,6 +56,16 @@ WORKFLOW_STUB_RE = re.compile(
     r'^##\s+W\d{3,}:\s+.+\((?:SUPERSEDED|MERGED)[^)]*\)\s*→\s*\S+'
 )
 
+# Legacy compacted headings (no stable ID) should not remain in living docs.
+LEGACY_COMPACTED_DEAD_RE = re.compile(
+    r'^##\s+.+\(\s*DEAD\s*\)\s+—\s+\*compacted\*\s*$',
+    re.IGNORECASE,
+)
+LEGACY_COMPACTED_REFUTED_RE = re.compile(
+    r'^##\s+.+\(\s*REFUTED\s*\)\s+—\s+\*compacted\*\s*$',
+    re.IGNORECASE,
+)
+
 # Required field patterns (bold markdown fields inside a section body)
 _CODE_RE = re.compile(r'^\s*-?\s*\*?\*?Code\*?\*?:', re.MULTILINE)
 _EVIDENCE_RE = re.compile(r'^\s*-?\s*\*?\*?Evidence\*?\*?:', re.MULTILINE)
@@ -110,6 +120,14 @@ def validate_concept_registry(content: str) -> list[Violation]:
         heading = section["heading"]
         entry_id = extract_id(heading)
 
+        if not entry_id and LEGACY_COMPACTED_DEAD_RE.match(heading):
+            violations.append(Violation(
+                "concepts", None,
+                "Legacy compacted DEAD heading found in living concept doc; "
+                "move it fully to concept_graveyard.md",
+            ))
+            continue
+
         if not entry_id:
             continue  # preamble or non-entry section
 
@@ -160,6 +178,14 @@ def validate_epistemic_state(content: str) -> list[Violation]:
     for section in sections:
         heading = section["heading"]
         entry_id = extract_id(heading)
+
+        if not entry_id and LEGACY_COMPACTED_REFUTED_RE.match(heading):
+            violations.append(Violation(
+                "epistemic", None,
+                "Legacy compacted REFUTED heading found in living epistemic doc; "
+                "move it fully to epistemic_graveyard.md",
+            ))
+            continue
 
         if not entry_id:
             continue
