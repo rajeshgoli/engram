@@ -160,6 +160,12 @@ class TestConceptRegistrySchema:
             violations = validate_concept_registry(doc)
             assert violations == [], f"Failed for format: {fmt}"
 
+    def test_legacy_compacted_dead_heading_rejected(self) -> None:
+        doc = "## data_loader (DEAD) — *compacted*\n"
+        violations = validate_concept_registry(doc)
+        assert len(violations) == 1
+        assert "Legacy compacted DEAD heading" in violations[0].message
+
 
 # ======================================================================
 # Schema: epistemic_state
@@ -224,6 +230,12 @@ Just a statement with no evidence chain.
 **Evidence:** data
 """
         assert validate_epistemic_state(doc) == []
+
+    def test_legacy_compacted_refuted_heading_rejected(self) -> None:
+        doc = "## Duplicate swings (REFUTED) — *compacted*\n"
+        violations = validate_epistemic_state(doc)
+        assert len(violations) == 1
+        assert "Legacy compacted REFUTED heading" in violations[0].message
 
 
 # ======================================================================
