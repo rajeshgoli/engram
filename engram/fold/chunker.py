@@ -33,8 +33,8 @@ _MONTH_PATTERN = (
 )
 _NATURAL_DATE_RE = re.compile(
     rf"\b(?:(?P<month>{_MONTH_PATTERN})\.?\s+(?P<day>\d{{1,2}})"
-    rf"(?:,\s*(?P<year>\d{{4}}))?|(?P<day2>\d{{1,2}})\s+"
-    rf"(?P<month2>{_MONTH_PATTERN})\.?(?:,\s*(?P<year2>\d{{4}}))?)\b",
+    rf"(?:(?:,\s*|\s+)(?P<year>\d{{4}}))?|(?P<day2>\d{{1,2}})\s+"
+    rf"(?P<month2>{_MONTH_PATTERN})\.?(?:(?:,\s*|\s+)(?P<year2>\d{{4}}))?)\b",
     re.IGNORECASE,
 )
 _MONTH_TO_NUM = {

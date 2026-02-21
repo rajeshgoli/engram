@@ -299,11 +299,23 @@ class TestExtractLatestDate:
         assert dt is not None
         assert dt.strftime("%Y-%m-%d") == "2025-01-05"
 
+    def test_month_day_year_without_comma_is_parsed(self):
+        text = "- Product Jan 05 2010: evidence updated"
+        dt = _extract_latest_date(text)
+        assert dt is not None
+        assert dt.strftime("%Y-%m-%d") == "2010-01-05"
+
     def test_day_month_year_is_parsed(self):
-        text = "- Product 11 Dec 2025: evidence updated"
+        text = "- Product 11 Dec, 2025: evidence updated"
         dt = _extract_latest_date(text)
         assert dt is not None
         assert dt.strftime("%Y-%m-%d") == "2025-12-11"
+
+    def test_day_month_year_without_comma_is_parsed(self):
+        text = "- Product 11 Dec 2010: evidence updated"
+        dt = _extract_latest_date(text)
+        assert dt is not None
+        assert dt.strftime("%Y-%m-%d") == "2010-12-11"
 
 
 # ------------------------------------------------------------------
