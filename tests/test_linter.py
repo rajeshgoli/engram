@@ -225,6 +225,48 @@ Just a statement with no evidence chain.
 """
         assert validate_epistemic_state(doc) == []
 
+    def test_valid_with_inferred_external_history_file(self, tmp_path: Path) -> None:
+        doc = """\
+## E005: externalized claim (believed)
+**Current position:** still believed.
+**Agent guidance:** keep monitoring.
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E005.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E005: externalized claim\n\n"
+            "- 2026-02-21: reviewed\n",
+        )
+        assert validate_epistemic_state(doc, epistemic_path=epistemic_path) == []
+
+    def test_missing_inline_and_inferred_history_file_is_violation(self, tmp_path: Path) -> None:
+        doc = """\
+## E006: externalized claim missing file (believed)
+**Current position:** still believed.
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        violations = validate_epistemic_state(doc, epistemic_path=epistemic_path)
+        assert len(violations) == 1
+        assert "inferred history file not found" in violations[0].message
+
+    def test_inferred_history_file_must_match_entry_id(self, tmp_path: Path) -> None:
+        doc = """\
+## E007: mismatched history id (believed)
+**Current position:** still believed.
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E007.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E999: wrong id\n",
+        )
+        violations = validate_epistemic_state(doc, epistemic_path=epistemic_path)
+        assert len(violations) == 1
+        assert "matching heading for E007" in violations[0].message
+
 
 # ======================================================================
 # Schema: workflow_registry

@@ -90,9 +90,12 @@ git worktree remove /tmp/engram-epistemic-{{ ref_commit[:8] }}
 {% endif %}
 
 For each entry below:
-- **Confirm** if still valid. Keep status and add a fresh History update.
+- **Confirm** if still valid. Keep status and append a fresh history update to
+  `{{ epistemic_history_dir }}/E{NNN}.md` for that entry ID.
 - **Refute** if no longer true. Move to {{ doc_paths.epistemic_graveyard }} and replace with stub.
 - **Supersede** if the belief changed. Update to the current claim with clear evidence/history.
+
+Do not add a `History file:` line in main epistemic entries. History file path is inferred from ID.
 
 {% for e in entries %}
 - **{{ e.name }}**{% if e.id %} ({{ e.id }}){% endif %}: {{ e.days_old }} days stale (last history: {{ e.last_date }})

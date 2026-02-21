@@ -373,6 +373,25 @@ class TestFindClaimsByStatus:
         results = _find_claims_by_status(epistemic, "contested", 14)
         assert results == []
 
+    def test_uses_external_history_when_inline_missing(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=45)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E021: contested external history (contested)\n"
+            "**Current position:** disputed.\n"
+        )
+        history_file = project / "docs" / "decisions" / "epistemic_state" / "E021.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E021: contested external history\n\n"
+            f"- {old_date}: reopened\n",
+        )
+        results = _find_claims_by_status(epistemic, "contested", 14)
+        assert len(results) == 1
+        assert results[0]["id"] == "E021"
+
 
 class TestFindStaleEpistemicEntries:
     def test_queue_text_cache_avoids_reread(self, project, monkeypatch):
@@ -652,6 +671,45 @@ class TestFindStaleEpistemicEntries:
         )
         assert len(results) == 1
         assert results[0]["id"] == "E020"
+
+    def test_uses_external_history_when_inline_missing(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E022: external history only (believed)\n"
+            "**Current position:** still believed.\n"
+        )
+        history_file = project / "docs" / "decisions" / "epistemic_state" / "E022.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E022: external history only\n\n"
+            f"- {old_date}: reviewed\n",
+        )
+        results = _find_stale_epistemic_entries(epistemic, days_threshold=90)
+        assert len(results) == 1
+        assert results[0]["id"] == "E022"
+
+    def test_external_history_newer_than_inline_suppresses_stale(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        recent_date = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E023: mixed history freshness (believed)\n"
+            "**History:**\n"
+            f"- {old_date}: old inline\n"
+        )
+        history_file = project / "docs" / "decisions" / "epistemic_state" / "E023.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E023: mixed history freshness\n\n"
+            f"- {recent_date}: latest external\n",
+        )
+        results = _find_stale_epistemic_entries(epistemic, days_threshold=90)
+        assert results == []
 
 
 # ------------------------------------------------------------------

@@ -18,7 +18,9 @@ workflow_registry:
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
+from engram.epistemic_history import infer_history_path
 from engram.parse import Section, extract_id, is_stub, parse_sections
 
 
@@ -142,7 +144,7 @@ def validate_concept_registry(content: str) -> list[Violation]:
     return violations
 
 
-def validate_epistemic_state(content: str) -> list[Violation]:
+def validate_epistemic_state(content: str, epistemic_path: Path | None = None) -> list[Violation]:
     """Validate epistemic_state.md schema rules."""
     violations: list[Violation] = []
     sections = parse_sections(content)
@@ -180,13 +182,44 @@ def validate_epistemic_state(content: str) -> list[Violation]:
             ))
             continue
 
-        # FULL requires Evidence: or History:
+        # FULL requires Evidence/History inline OR inferred external history file.
         body = section["text"]
-        if not _EVIDENCE_RE.search(body) and not _HISTORY_RE.search(body):
+        has_inline = bool(_EVIDENCE_RE.search(body) or _HISTORY_RE.search(body))
+        if has_inline:
+            continue
+
+        if epistemic_path is None:
             violations.append(Violation(
                 "epistemic", entry_id,
                 "Non-refuted epistemic entry missing required "
                 "'Evidence:' or 'History:' field",
+            ))
+            continue
+
+        history_path = infer_history_path(epistemic_path, entry_id)
+        if not history_path.exists():
+            violations.append(Violation(
+                "epistemic", entry_id,
+                "Missing inline 'Evidence:'/'History:' and inferred history file "
+                f"not found: {history_path}",
+            ))
+            continue
+
+        try:
+            history_text = history_path.read_text()
+        except OSError:
+            violations.append(Violation(
+                "epistemic", entry_id,
+                f"Could not read inferred history file: {history_path}",
+            ))
+            continue
+
+        # Basic ID integrity guard: history file must contain a heading for this ID.
+        if not re.search(rf"^##\s+{re.escape(entry_id)}\b", history_text, re.MULTILINE):
+            violations.append(Violation(
+                "epistemic", entry_id,
+                f"Inferred history file does not contain matching heading for {entry_id}: "
+                f"{history_path}",
             ))
 
     return violations

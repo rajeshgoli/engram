@@ -19,6 +19,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 from engram.config import resolve_doc_paths
+from engram.epistemic_history import extract_inline_history_lines, infer_history_path
 from engram.fold.ids import IDAllocator, estimate_new_entities
 from engram.fold.prompt import render_agent_prompt, render_chunk_input, render_triage_input
 from engram.parse import extract_id, is_stub, parse_sections
@@ -63,19 +64,6 @@ _MONTH_TO_NUM = {
     "dec": 12,
     "december": 12,
 }
-# Recognized epistemic field headers. Used to detect field boundaries without
-# misclassifying free-form history lines like "Product Dec 11: ...".
-_EPISTEMIC_FIELD_NAMES = {
-    "current position",
-    "evidence",
-    "history",
-    "agent guidance",
-    "corrected by",
-    "superseded by",
-}
-# Markdown-style field header, e.g. "History:" / "**History:**" / "- **History:**"
-_FIELD_HEADER_RE = re.compile(r"^(?:\*\*)?([A-Za-z][A-Za-z _/-]*?)(?:\*\*)?:\s*(.*)$")
-
 # Cache lowercased queue file text across repeated drift scans.
 _QUEUE_TEXT_CACHE_MAX_ENTRIES = 2048
 _QUEUE_TEXT_CACHE: OrderedDict[tuple[str, str, int, int], str] = OrderedDict()
@@ -341,38 +329,46 @@ def _extract_latest_date(text: str) -> datetime | None:
 
 def _extract_latest_history_date(section_text: str) -> datetime | None:
     """Extract the most recent parseable date from an epistemic History block."""
-    history_lines: list[str] = []
-    in_history = False
-
-    for line in section_text.splitlines():
-        stripped = line.strip()
-        normalized = stripped.removeprefix("- ").strip()
-        field_match = _FIELD_HEADER_RE.match(normalized)
-        field_name = field_match.group(1).strip().lower() if field_match else None
-
-        if field_name == "history":
-            in_history = True
-            remainder = field_match.group(2).strip() if field_match else ""
-            if remainder:
-                history_lines.append(remainder)
-            continue
-
-        if not in_history:
-            continue
-
-        if stripped.startswith("## "):
-            break
-        # Stop at the next recognized epistemic field (plain or bold).
-        if field_match and field_name in _EPISTEMIC_FIELD_NAMES and field_name != "history":
-            break
-
-        if stripped:
-            history_lines.append(stripped)
+    history_lines = extract_inline_history_lines(section_text)
 
     if not history_lines:
         return None
 
     return _extract_latest_date("\n".join(history_lines))
+
+
+def _extract_latest_external_history_date(
+    *,
+    epistemic_path: Path,
+    entry_id: str | None,
+) -> datetime | None:
+    """Extract latest parseable date from inferred per-entry history file."""
+    if not entry_id:
+        return None
+    history_path = infer_history_path(epistemic_path, entry_id)
+    if not history_path.exists():
+        return None
+    try:
+        return _extract_latest_date(history_path.read_text())
+    except OSError:
+        return None
+
+
+def _latest_epistemic_activity_date(
+    *,
+    epistemic_path: Path,
+    section_heading: str,
+    section_text: str,
+) -> datetime | None:
+    """Return latest activity date for an epistemic entry from inline/external history."""
+    entry_id = extract_id(section_heading)
+    inline_date = _extract_latest_history_date(section_text)
+    external_date = _extract_latest_external_history_date(
+        epistemic_path=epistemic_path,
+        entry_id=entry_id,
+    )
+    dates = [dt for dt in (inline_date, external_date) if dt is not None]
+    return max(dates) if dates else None
 
 
 def _parse_queue_date(raw: Any) -> datetime | None:
@@ -487,7 +483,11 @@ def _find_claims_by_status(
             continue
         if is_stub(sec["heading"]):
             continue
-        latest = _extract_latest_date(sec["text"])
+        latest = _latest_epistemic_activity_date(
+            epistemic_path=epistemic_path,
+            section_heading=sec["heading"],
+            section_text=sec["text"],
+        )
         if latest is None:
             continue
         age_days = (now - latest).days
@@ -538,7 +538,11 @@ def _find_stale_epistemic_entries(
         if is_stub(sec["heading"]):
             continue
 
-        latest_history = _extract_latest_history_date(sec["text"])
+        latest_history = _latest_epistemic_activity_date(
+            epistemic_path=epistemic_path,
+            section_heading=sec["heading"],
+            section_text=sec["text"],
+        )
         if latest_history is None:
             continue
 
