@@ -40,6 +40,7 @@ def lint(
     living_docs: dict[str, str],
     graveyard_docs: dict[str, str] | None = None,
     config: dict[str, Any] | None = None,
+    doc_paths: dict[str, Path] | None = None,
 ) -> LintResult:
     """Validate all living docs against schema rules.
 
@@ -65,7 +66,8 @@ def lint(
     if "concepts" in living_docs:
         violations.extend(validate_concept_registry(living_docs["concepts"]))
     if "epistemic" in living_docs:
-        violations.extend(validate_epistemic_state(living_docs["epistemic"]))
+        epistemic_path = doc_paths.get("epistemic") if doc_paths else None
+        violations.extend(validate_epistemic_state(living_docs["epistemic"], epistemic_path))
     if "workflows" in living_docs:
         violations.extend(validate_workflow_registry(living_docs["workflows"]))
 
@@ -87,6 +89,7 @@ def lint_post_dispatch(
     pre_assigned_ids: list[str] | None = None,
     expected_growth: int = 0,
     config: dict[str, Any] | None = None,
+    project_root: Path | None = None,
 ) -> LintResult:
     """Full post-dispatch validation: schema + refs + guards.
 
@@ -108,8 +111,13 @@ def lint_post_dispatch(
     config:
         Optional config dict.
     """
+    doc_paths = None
+    if project_root is not None and config is not None:
+        from engram.config import resolve_doc_paths
+        doc_paths = resolve_doc_paths(config, project_root)
+
     # Run standard lint on after state
-    result = lint(after_contents, graveyard_docs, config)
+    result = lint(after_contents, graveyard_docs, config, doc_paths=doc_paths)
     violations = list(result.violations)
 
     # Guard checks
@@ -154,4 +162,4 @@ def lint_from_paths(
         if path.exists():
             graveyard_docs[key] = path.read_text()
 
-    return lint(living_docs, graveyard_docs, config)
+    return lint(living_docs, graveyard_docs, config, doc_paths=paths)

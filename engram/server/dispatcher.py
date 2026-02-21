@@ -145,6 +145,7 @@ class Dispatcher:
                 pre_assigned_ids=pre_assigned if pre_assigned else None,
                 expected_growth=chunk.chunk_chars,
                 config=self._config,
+                project_root=self._project_root,
             )
 
             if result.passed:
@@ -199,7 +200,7 @@ class Dispatcher:
                 )
 
                 from engram.linter import lint
-                result = lint(after_contents, graveyard_docs, self._config)
+                result = lint(after_contents, graveyard_docs, self._config, doc_paths=doc_paths)
 
                 if result.passed:
                     self._db.update_dispatch_state(dispatch_id, "validated")
@@ -227,7 +228,7 @@ class Dispatcher:
                         graveyard2 = read_docs(
                             doc_paths, ("concept_graveyard", "epistemic_graveyard"),
                         )
-                        result2 = lint(after2, graveyard2, self._config)
+                        result2 = lint(after2, graveyard2, self._config, doc_paths=doc_paths)
                         if result2.passed:
                             self._db.update_dispatch_state(dispatch_id, "validated")
                             self._db.mark_l0_stale()  # stale BEFORE committed

@@ -98,3 +98,32 @@ class TestInit:
         result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
         assert result.exit_code == 0
         assert (project_dir / "docs" / "decisions").is_dir()
+
+
+class TestMigrateEpistemicHistory:
+    def test_externalizes_and_lints(self, runner: CliRunner, project_dir: Path) -> None:
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        epistemic = project_dir / "docs" / "decisions" / "epistemic_state.md"
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E005: externalize me (believed)\n"
+            "**Current position:** true for now.\n"
+            "**History:**\n"
+            "- 2026-02-21: reviewed\n"
+            "**Agent guidance:** keep watching.\n",
+        )
+
+        result = runner.invoke(
+            cli,
+            ["migrate-epistemic-history", "--project-root", str(project_dir)],
+        )
+        assert result.exit_code == 0
+        assert "Epistemic history migration complete." in result.output
+        assert "Lint: PASS" in result.output
+
+        updated = epistemic.read_text()
+        assert "**History:**" not in updated
+        history_file = project_dir / "docs" / "decisions" / "epistemic_state" / "E005.md"
+        assert history_file.exists()
