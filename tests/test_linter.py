@@ -316,6 +316,44 @@ Just a statement with no evidence chain.
         assert len(violations) == 1
         assert "matching heading for E007" in violations[0].message
 
+    def test_external_audit_requires_evidence_at_even_with_inline_evidence(
+        self, tmp_path: Path,
+    ) -> None:
+        doc = """\
+## E008: mixed history sources (believed)
+**Evidence:** carried over from prior draft
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E008.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E008: mixed history sources\n\n"
+            "- Epistemic audit Feb 21, 2026 (a3e0b731): reviewed\n",
+        )
+        violations = validate_epistemic_state(doc, epistemic_path=epistemic_path)
+        assert len(violations) == 1
+        assert "Evidence@<commit>" in violations[0].message
+
+    def test_reaffirmed_in_external_history_rejected_even_with_inline_evidence(
+        self, tmp_path: Path,
+    ) -> None:
+        doc = """\
+## E009: mixed history sources (believed)
+**Evidence:** carried over from prior draft
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E009.md"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E009: mixed history sources\n\n"
+            "- Epistemic audit Feb 21, 2026 (a3e0b731): reaffirmed -> believed\n",
+        )
+        violations = validate_epistemic_state(doc, epistemic_path=epistemic_path)
+        assert len(violations) == 2
+        assert any("reaffirmed" in v.message for v in violations)
+
 
 # ======================================================================
 # Schema: workflow_registry
