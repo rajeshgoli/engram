@@ -22,8 +22,8 @@ sources:
     - docs/archive/
     - docs/specs/
   sessions:
-    format: claude-code           # Built-in: claude-code
-    path: ~/.claude/history.jsonl  # Default for claude-code format
+    format: claude-code            # Built-in: claude-code, codex
+    path: ~/.claude/history.jsonl  # Default for claude-code (codex: ~/.codex/history.jsonl)
     project_match:                 # Filter sessions to this project
       - my-project
 

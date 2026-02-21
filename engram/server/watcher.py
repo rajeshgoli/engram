@@ -11,6 +11,7 @@ Three event sources:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -288,16 +289,24 @@ class SessionPoller:
         self,
         config: dict[str, Any],
         callback: BufferCallback,
+        project_root: Path | None = None,
     ) -> None:
         self._config = config
         self._callback = callback
+        self._project_root = project_root
         self._last_mtime: float | None = None
+        self._last_offset: int = 0
+        self._last_tree_mtime: float | None = None
+        self._known_prompt_counts: dict[str, int] = {}
 
         sessions_cfg = config.get("sources", {}).get("sessions", {})
         path_str = sessions_cfg.get("path", "~/.claude/history.jsonl")
         self._path = Path(os.path.expanduser(path_str))
         self._project_match: list[str] = sessions_cfg.get("project_match", [])
         self._format: str = sessions_cfg.get("format", "claude-code")
+        self._session_tree: Path | None = None
+        if self._format == "codex":
+            self._session_tree = self._path.parent / "sessions"
 
     def set_last_mtime(self, mtime: float | None) -> None:
         """Set the bookmark for last known mtime."""
@@ -305,6 +314,20 @@ class SessionPoller:
 
     def get_last_mtime(self) -> float | None:
         return self._last_mtime
+
+    def set_last_offset(self, offset: int) -> None:
+        """Set the bookmark for last processed byte offset."""
+        self._last_offset = max(0, int(offset))
+
+    def get_last_offset(self) -> int:
+        return self._last_offset
+
+    def set_last_tree_mtime(self, mtime: float | None) -> None:
+        """Set bookmark for codex sessions tree mtime."""
+        self._last_tree_mtime = mtime
+
+    def get_last_tree_mtime(self) -> float | None:
+        return self._last_tree_mtime
 
     def poll(self) -> int:
         """Check for new session entries.
@@ -316,13 +339,28 @@ class SessionPoller:
 
         try:
             current_mtime = self._path.stat().st_mtime
+            current_size = self._path.stat().st_size
         except OSError:
             return 0
 
-        if self._last_mtime is not None and current_mtime <= self._last_mtime:
+        tree_mtime = _latest_tree_mtime(self._session_tree)
+
+        history_changed = (
+            self._last_mtime is None
+            or current_mtime > self._last_mtime
+            or current_size < self._last_offset
+        )
+        tree_changed = (
+            tree_mtime is not None
+            and (
+                self._last_tree_mtime is None
+                or tree_mtime > self._last_tree_mtime
+            )
+        )
+        if not history_changed and not tree_changed:
             return 0
 
-        # File changed — parse new sessions
+        # File changed — parse incremental session entries.
         from engram.fold.sessions import get_adapter
 
         try:
@@ -330,20 +368,106 @@ class SessionPoller:
         except ValueError:
             log.warning("Unknown session format: %s", self._format)
             self._last_mtime = current_mtime
+            self._last_offset = current_size
+            self._last_tree_mtime = tree_mtime
             return 0
 
-        entries = adapter.parse(self._path, self._project_match)
+        force_full_reparse = (
+            self._format == "codex"
+            and tree_changed
+            and not history_changed
+            and bool(self._project_match)
+        )
+        start_offset = 0 if current_size < self._last_offset else self._last_offset
+        if force_full_reparse:
+            start_offset = 0
+        entries, new_offset = adapter.parse_incremental(
+            self._path,
+            self._project_match,
+            start_offset=start_offset,
+        )
 
         count = 0
         for entry in entries:
+            known_prompts = self._known_prompt_counts.get(entry.session_id, 0)
+            emitted_prompt_count = entry.prompt_count
+            if force_full_reparse:
+                if entry.prompt_count <= known_prompts:
+                    continue
+                emitted_prompt_count = entry.prompt_count - known_prompts
+
+            rel_path = f".engram/sessions/{entry.session_id}.md"
+            chars = entry.chars
+            if self._project_root:
+                rel_path, chars = self._write_session_file(
+                    session_id=entry.session_id,
+                    rendered=entry.rendered,
+                    reset=start_offset == 0,
+                )
             self._callback(
-                f".engram/sessions/{entry.session_id}.md",
+                rel_path,
                 "prompts",
-                entry.chars,
+                chars,
                 entry.date,
-                None,
+                json.dumps({"prompt_count": emitted_prompt_count}),
             )
+            if start_offset == 0:
+                self._known_prompt_counts[entry.session_id] = entry.prompt_count
+            else:
+                self._known_prompt_counts[entry.session_id] = (
+                    known_prompts + entry.prompt_count
+                )
             count += 1
 
         self._last_mtime = current_mtime
+        self._last_offset = new_offset
+        self._last_tree_mtime = tree_mtime
         return count
+
+    def _write_session_file(
+        self,
+        session_id: str,
+        rendered: str,
+        *,
+        reset: bool,
+    ) -> tuple[str, int]:
+        """Write incremental session markdown under ``.engram/sessions``."""
+        if not self._project_root:
+            rel_path = f".engram/sessions/{session_id}.md"
+            return rel_path, len(rendered)
+
+        sessions_dir = self._project_root / ".engram" / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        session_file = sessions_dir / f"{session_id}.md"
+
+        if reset or not session_file.exists():
+            session_file.write_text(rendered)
+        else:
+            with open(session_file, "a") as fh:
+                if session_file.stat().st_size > 0:
+                    fh.write("\n")
+                fh.write(rendered)
+
+        rel_path = str(session_file.relative_to(self._project_root))
+        try:
+            chars = session_file.stat().st_size
+        except OSError:
+            chars = len(rendered)
+        return rel_path, chars
+
+
+def _latest_tree_mtime(path: Path | None) -> float | None:
+    """Return latest mtime under tree path, or None when unavailable."""
+    if path is None or not path.exists():
+        return None
+    latest: float | None = None
+    try:
+        for child in path.rglob("*"):
+            if not child.is_file():
+                continue
+            mtime = child.stat().st_mtime
+            if latest is None or mtime > latest:
+                latest = mtime
+    except OSError:
+        return latest
+    return latest

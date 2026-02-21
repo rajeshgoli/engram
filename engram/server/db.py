@@ -87,7 +87,9 @@ class ServerDB:
                     last_poll_time      TEXT,
                     last_dispatch_time  TEXT,
                     buffer_chars_total  INTEGER NOT NULL DEFAULT 0,
-                    last_session_mtime  REAL
+                    last_session_mtime  REAL,
+                    last_session_offset INTEGER NOT NULL DEFAULT 0,
+                    last_session_tree_mtime REAL
                 );
             """)
 
@@ -100,6 +102,18 @@ class ServerDB:
             # Add l0_stale column (idempotent)
             try:
                 conn.execute("ALTER TABLE server_state ADD COLUMN l0_stale INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute(
+                    "ALTER TABLE server_state ADD COLUMN last_session_offset INTEGER DEFAULT 0",
+                )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute(
+                    "ALTER TABLE server_state ADD COLUMN last_session_tree_mtime REAL",
+                )
             except sqlite3.OperationalError:
                 pass  # Column already exists
 
@@ -486,6 +500,7 @@ class ServerDB:
         valid_keys = {
             "last_poll_commit", "last_poll_time", "last_dispatch_time",
             "buffer_chars_total", "last_session_mtime",
+            "last_session_offset", "last_session_tree_mtime",
         }
         invalid = set(kwargs) - valid_keys
         if invalid:

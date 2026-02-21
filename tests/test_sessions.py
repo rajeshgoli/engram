@@ -60,6 +60,59 @@ def history_file(tmp_path: Path) -> Path:
     return path
 
 
+@pytest.fixture
+def codex_history_file(tmp_path: Path) -> Path:
+    """Create a codex home with history and per-session metadata logs."""
+    codex_home = tmp_path / ".codex"
+    sessions_dir = codex_home / "sessions" / "2026" / "02" / "21"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+
+    history = codex_home / "history.jsonl"
+    history_entries = [
+        {
+            "session_id": "11111111-1111-1111-1111-111111111111",
+            "ts": 1771641000,
+            "text": "Implement Codex ingestion with project filtering support",
+        },
+        {
+            "session_id": "11111111-1111-1111-1111-111111111111",
+            "ts": 1771641060,
+            "text": "Add tests for codex session adapter parsing behavior",
+        },
+        {
+            "session_id": "22222222-2222-2222-2222-222222222222",
+            "ts": 1771641120,
+            "text": "Investigate unrelated repository prompt history entry",
+        },
+    ]
+    with open(history, "w") as fh:
+        for row in history_entries:
+            fh.write(json.dumps(row) + "\n")
+
+    session_1 = sessions_dir / (
+        "rollout-2026-02-21T10-00-00-11111111-1111-1111-1111-111111111111.jsonl"
+    )
+    session_2 = sessions_dir / (
+        "rollout-2026-02-21T10-05-00-22222222-2222-2222-2222-222222222222.jsonl"
+    )
+    session_1.write_text(json.dumps({
+        "type": "session_meta",
+        "payload": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "cwd": "/Users/dev/my-project",
+        },
+    }) + "\n")
+    session_2.write_text(json.dumps({
+        "type": "session_meta",
+        "payload": {
+            "id": "22222222-2222-2222-2222-222222222222",
+            "cwd": "/Users/dev/other-project",
+        },
+    }) + "\n")
+
+    return history
+
+
 class TestClaudeCodeAdapter:
     def test_groups_by_session(self, history_file: Path) -> None:
         adapter = ClaudeCodeAdapter()
@@ -138,12 +191,73 @@ class TestClaudeCodeAdapter:
         # Date should be parseable and represent the first prompt's timestamp
         assert entries[0].date  # non-empty
 
+    def test_incremental_only_parses_appended_lines(self, history_file: Path) -> None:
+        adapter = ClaudeCodeAdapter()
+        first_entries, offset = adapter.parse_incremental(
+            history_file, project_match=["my-project"], start_offset=0,
+        )
+        assert len(first_entries) == 1
+        assert offset > 0
+
+        with open(history_file, "a") as fh:
+            fh.write(json.dumps({
+                "sessionId": "sess-002",
+                "project": "/Users/dev/other-project",
+                "display": "A newly appended prompt that should be emitted once",
+                "timestamp": int(time.time() * 1000),
+            }) + "\n")
+
+        second_entries, second_offset = adapter.parse_incremental(
+            history_file, project_match=["other-project"], start_offset=offset,
+        )
+        assert len(second_entries) == 1
+        assert second_entries[0].session_id == "sess-002"
+        assert second_offset > offset
+
 
 class TestCodexAdapter:
-    def test_returns_empty(self, tmp_path: Path) -> None:
+    def test_nonexistent_file(self, tmp_path: Path) -> None:
         adapter = CodexAdapter()
         entries = adapter.parse(tmp_path / "codex.jsonl", project_match=[])
         assert entries == []
+
+    def test_parses_and_groups_codex_prompts(self, codex_history_file: Path) -> None:
+        adapter = CodexAdapter()
+        entries = adapter.parse(codex_history_file, project_match=[])
+        assert len(entries) == 2
+        by_session = {e.session_id: e for e in entries}
+        assert by_session["11111111-1111-1111-1111-111111111111"].prompt_count == 2
+        assert "project filtering support" in by_session[
+            "11111111-1111-1111-1111-111111111111"
+        ].rendered
+
+    def test_filters_using_codex_session_cwd(self, codex_history_file: Path) -> None:
+        adapter = CodexAdapter()
+        entries = adapter.parse(codex_history_file, project_match=["my-project"])
+        assert len(entries) == 1
+        assert entries[0].session_id == "11111111-1111-1111-1111-111111111111"
+
+    def test_incremental_reads_only_new_codex_lines(self, codex_history_file: Path) -> None:
+        adapter = CodexAdapter()
+        first, offset = adapter.parse_incremental(
+            codex_history_file, project_match=["my-project"], start_offset=0,
+        )
+        assert len(first) == 1
+        assert offset > 0
+
+        with open(codex_history_file, "a") as fh:
+            fh.write(json.dumps({
+                "session_id": "11111111-1111-1111-1111-111111111111",
+                "ts": 1771641180,
+                "text": "Fresh appended codex prompt for incremental polling test",
+            }) + "\n")
+
+        second, second_offset = adapter.parse_incremental(
+            codex_history_file, project_match=["my-project"], start_offset=offset,
+        )
+        assert len(second) == 1
+        assert second[0].prompt_count == 1
+        assert second_offset > offset
 
 
 class TestGetAdapter:

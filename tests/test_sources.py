@@ -183,6 +183,33 @@ class TestGetDocGitDates:
         assert created == "2026-01-01T00:00:00-06:00"
         assert modified == "2026-02-01T00:00:00-06:00"
 
+    def test_created_date_uses_relative_path_and_follow(self, tmp_path: Path) -> None:
+        seen_cmds: list[list[str]] = []
+
+        def mock_run(cmd, **kwargs):
+            seen_cmds.append(cmd)
+            if "--diff-filter=A" in cmd:
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=0,
+                    stdout="2026-01-01T00:00:00-06:00\n",
+                )
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0,
+                stdout="2026-02-01T00:00:00-06:00\n",
+            )
+
+        doc = tmp_path / "docs" / "nested" / "test.md"
+        doc.parent.mkdir(parents=True)
+        doc.write_text("content")
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=mock_run):
+            get_doc_git_dates(doc, tmp_path)
+
+        created_cmd = next(cmd for cmd in seen_cmds if "--diff-filter=A" in cmd)
+        assert "--follow" in created_cmd
+        assert "docs/nested/test.md" in created_cmd
+        assert "**/test.md" not in created_cmd
+
     def test_no_git_history(self, tmp_path: Path) -> None:
         def mock_run(cmd, **kwargs):
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="\n")

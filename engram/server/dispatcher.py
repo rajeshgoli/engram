@@ -11,7 +11,9 @@ on failure (max 2).  L0 briefing regeneration is deferred to queue drain.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -62,6 +64,10 @@ class Dispatcher:
 
         # Snapshot living docs before dispatch
         before_contents = read_docs(doc_paths, ("timeline", "concepts", "epistemic", "workflows"))
+
+        buffered = self._flush_buffer_to_queue()
+        if buffered:
+            log.info("Flushed %d buffered item(s) into queue", buffered)
 
         # Build the chunk
         try:
@@ -256,6 +262,137 @@ class Dispatcher:
         if correction_text:
             prompt = prompt + "\n\n" + correction_text
         return invoke_agent(self._config, self._project_root, prompt)
+
+    def _flush_buffer_to_queue(self) -> int:
+        """Move pending buffer items into ``queue.jsonl`` for chunking."""
+        items = self._db.get_buffer_items()
+        if not items:
+            return 0
+
+        engram_dir = self._project_root / ".engram"
+        engram_dir.mkdir(parents=True, exist_ok=True)
+        queue_file = engram_dir / "queue.jsonl"
+
+        queue: list[dict[str, Any]] = []
+        if queue_file.exists():
+            with open(queue_file) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        queue.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+
+        existing_paths = {
+            entry.get("path")
+            for entry in queue
+            if isinstance(entry.get("path"), str)
+        }
+        consume_ids: list[int] = []
+        added = 0
+
+        for item in items:
+            entry = self._buffer_item_to_queue_entry(item)
+            consume_ids.append(item["id"])
+            if entry is None:
+                continue
+            if entry["path"] in existing_paths:
+                continue
+            queue.append(entry)
+            existing_paths.add(entry["path"])
+            added += 1
+
+        queue.sort(key=lambda e: str(e.get("date", "")))
+        with open(queue_file, "w") as fh:
+            for entry in queue:
+                fh.write(json.dumps(entry) + "\n")
+
+        if consume_ids:
+            self._db.consume_buffer(consume_ids)
+        return added
+
+    def _buffer_item_to_queue_entry(
+        self,
+        item: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Convert a buffered watcher item into queue.jsonl entry schema."""
+        path = item.get("path")
+        item_type = item.get("item_type")
+        if not isinstance(path, str) or not isinstance(item_type, str):
+            return None
+
+        entry_date = item.get("date") or item.get("added_at")
+        if not isinstance(entry_date, str) or not entry_date:
+            entry_date = datetime.now(timezone.utc).isoformat()
+        chars = int(item.get("chars") or 0)
+
+        if item_type == "doc":
+            return {
+                "date": entry_date,
+                "type": "doc",
+                "path": path,
+                "chars": chars,
+                "pass": "revisit",
+            }
+
+        if item_type == "issue":
+            issue_number, issue_title = self._resolve_issue_metadata(path)
+            return {
+                "date": entry_date,
+                "type": "issue",
+                "path": path,
+                "chars": chars,
+                "pass": "initial",
+                "issue_number": issue_number,
+                "issue_title": issue_title,
+            }
+
+        if item_type == "prompts":
+            prompt_count = 1
+            metadata = item.get("metadata")
+            if isinstance(metadata, str) and metadata:
+                try:
+                    parsed = json.loads(metadata)
+                    prompt_count = int(parsed.get("prompt_count", 1))
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    prompt_count = 1
+
+            return {
+                "date": entry_date,
+                "type": "prompts",
+                "path": path,
+                "chars": chars,
+                "pass": "initial",
+                "session_id": Path(path).stem,
+                "prompt_count": max(prompt_count, 1),
+            }
+
+        return None
+
+    def _resolve_issue_metadata(self, rel_path: str) -> tuple[int, str]:
+        """Resolve issue number/title from issue JSON path when possible."""
+        issue_number = 0
+        issue_title = ""
+        issue_path = self._project_root / rel_path
+
+        if issue_path.exists():
+            try:
+                issue = json.loads(issue_path.read_text())
+                raw_number = issue.get("number", 0)
+                issue_number = int(raw_number)
+                raw_title = issue.get("title", "")
+                issue_title = str(raw_title) if raw_title is not None else ""
+            except (json.JSONDecodeError, TypeError, ValueError, OSError):
+                pass
+
+        if issue_number == 0:
+            match = re.match(r"(\d+)", Path(rel_path).stem)
+            if match:
+                issue_number = int(match.group(1))
+
+        return issue_number, issue_title
 
 
 # ------------------------------------------------------------------

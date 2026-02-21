@@ -212,6 +212,67 @@ class TestBuildQueueSessions:
         content = session_file.read_text()
         assert "long enough prompt" in content
 
+    def test_includes_codex_session_entries(self, project: Path) -> None:
+        codex_home = project.parent / ".codex"
+        codex_home.mkdir(parents=True, exist_ok=True)
+        history = codex_home / "history.jsonl"
+        history.write_text(
+            json.dumps({
+                "session_id": "11111111-1111-1111-1111-111111111111",
+                "ts": 1771641000,
+                "text": "Implement codex adapter behavior with rich project context",
+            }) + "\n"
+            + json.dumps({
+                "session_id": "22222222-2222-2222-2222-222222222222",
+                "ts": 1771641060,
+                "text": "This belongs to a different repo and should be filtered out",
+            }) + "\n",
+        )
+
+        sessions_dir = codex_home / "sessions" / "2026" / "02" / "21"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        (sessions_dir / "rollout-2026-02-21-11111111-1111-1111-1111-111111111111.jsonl").write_text(
+            json.dumps({
+                "type": "session_meta",
+                "payload": {
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "cwd": "/Users/dev/project",
+                },
+            }) + "\n",
+        )
+        (sessions_dir / "rollout-2026-02-21-22222222-2222-2222-2222-222222222222.jsonl").write_text(
+            json.dumps({
+                "type": "session_meta",
+                "payload": {
+                    "id": "22222222-2222-2222-2222-222222222222",
+                    "cwd": "/Users/dev/other-repo",
+                },
+            }) + "\n",
+        )
+
+        config = _make_config(project, {
+            "sources": {
+                "sessions": {
+                    "format": "codex",
+                    "path": str(history),
+                    "project_match": ["project"],
+                },
+            },
+        })
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            entries = build_queue(config, project)
+
+        session_entries = [e for e in entries if e["type"] == "prompts"]
+        assert len(session_entries) == 1
+        assert session_entries[0]["session_id"] == "11111111-1111-1111-1111-111111111111"
+
+        session_file = (
+            project / ".engram" / "sessions" / "11111111-1111-1111-1111-111111111111.md"
+        )
+        assert session_file.exists()
+        assert "codex adapter behavior" in session_file.read_text()
+
 
 class TestBuildQueueSorting:
     def test_entries_sorted_by_date(self, project: Path) -> None:

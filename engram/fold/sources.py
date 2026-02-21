@@ -87,23 +87,27 @@ def get_doc_git_dates(
 ) -> tuple[str | None, str | None]:
     """Get first-commit and last-commit dates for a doc from git.
 
-    Tracks renames by searching for the filename across all paths.
+    Tracks renames while staying path-specific via ``--follow``.
 
     Returns:
         (created_date, modified_date) as ISO strings, or None.
     """
     rel_path = doc_path.relative_to(project_root)
-    filename = doc_path.name
 
-    # First commit: search across all paths for this filename to handle renames
+    # First commit on this logical path (with rename following)
     result = subprocess.run(
-        ["git", "log", "--all", "--diff-filter=A", "--format=%aI",
-         "--name-only", "--", f"**/{filename}"],
+        [
+            "git", "log", "--all", "--follow",
+            "--diff-filter=A", "--reverse", "--format=%aI",
+            "--", str(rel_path),
+        ],
         capture_output=True, text=True, cwd=project_root,
     )
-    dates = [line for line in result.stdout.strip().split("\n")
-             if line and line[0].isdigit()]
-    created = sorted(dates)[0] if dates else None
+    dates = [
+        line for line in result.stdout.strip().split("\n")
+        if line and line[0].isdigit()
+    ]
+    created = dates[0] if dates else None
 
     # Last commit on current path
     result = subprocess.run(

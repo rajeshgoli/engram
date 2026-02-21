@@ -63,3 +63,7 @@ Design phase. See [engram_idea.md](engram_idea.md) for the full spec including a
 ## Getting Started
 
 Not yet implemented. The spec is the current deliverable. If you're interested in this problem space, read the idea doc and open an issue.
+
+Session source formats currently supported in config:
+- `claude-code`: `~/.claude/history.jsonl`
+- `codex`: `~/.codex/history.jsonl` (plus `~/.codex/sessions/**` for project-path matching)
