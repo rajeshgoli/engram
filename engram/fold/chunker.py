@@ -25,6 +25,54 @@ from engram.parse import extract_id, is_stub, parse_sections
 
 # Regex for ISO dates (YYYY-MM-DD) in text
 _DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+# Regex for month-name dates, e.g. "Dec 11", "Dec 11, 2025", "11 Dec 2025"
+_MONTH_PATTERN = (
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|"
+    r"jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|sept|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?"
+)
+_NATURAL_DATE_RE = re.compile(
+    rf"\b(?:(?P<month>{_MONTH_PATTERN})\.?\s+(?P<day>\d{{1,2}})"
+    rf"(?:,\s*(?P<year>\d{{4}}))?|(?P<day2>\d{{1,2}})\s+"
+    rf"(?P<month2>{_MONTH_PATTERN})\.?(?:,\s*(?P<year2>\d{{4}}))?)\b",
+    re.IGNORECASE,
+)
+_MONTH_TO_NUM = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
+# Recognized epistemic field headers. Used to detect field boundaries without
+# misclassifying free-form history lines like "Product Dec 11: ...".
+_EPISTEMIC_FIELD_NAMES = {
+    "current position",
+    "evidence",
+    "history",
+    "agent guidance",
+    "corrected by",
+    "superseded by",
+}
 # Markdown-style field header, e.g. "History:" / "**History:**" / "- **History:**"
 _FIELD_HEADER_RE = re.compile(r"^(?:\*\*)?([A-Za-z][A-Za-z _/-]*?)(?:\*\*)?:\s*(.*)$")
 
@@ -223,22 +271,76 @@ def _find_orphaned_concepts(
     return orphans
 
 
-def _extract_latest_date(text: str) -> datetime | None:
-    """Extract the most recent YYYY-MM-DD date from text."""
-    matches = _DATE_RE.findall(text)
-    if not matches:
+def _parse_natural_date(
+    match: re.Match[str],
+    *,
+    now: datetime,
+) -> datetime | None:
+    """Parse a month-name date regex match into a UTC datetime."""
+    month_name = (match.group("month") or match.group("month2") or "").lower()
+    day_raw = match.group("day") or match.group("day2")
+    year_raw = match.group("year") or match.group("year2")
+    if not month_name or not day_raw:
         return None
-    parsed = []
-    for d in matches:
+
+    month = _MONTH_TO_NUM.get(month_name)
+    if not month:
+        return None
+
+    try:
+        day = int(day_raw)
+    except ValueError:
+        return None
+
+    if year_raw:
         try:
-            parsed.append(datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=timezone.utc))
+            year = int(year_raw)
+        except ValueError:
+            return None
+    else:
+        # Missing year: infer nearest past occurrence to avoid future skew.
+        year = now.year
+
+    try:
+        parsed = datetime(year, month, day, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+    if not year_raw and parsed > now:
+        try:
+            parsed = datetime(year - 1, month, day, tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+    return parsed
+
+
+def _extract_latest_date(text: str) -> datetime | None:
+    """Extract the most recent parseable date from text.
+
+    Supports:
+    - ISO dates: YYYY-MM-DD
+    - Month-name dates: "Dec 11", "Dec 11, 2025", "11 Dec 2025"
+    """
+    parsed: list[datetime] = []
+
+    for iso in _DATE_RE.findall(text):
+        try:
+            parsed.append(datetime.strptime(iso, "%Y-%m-%d").replace(tzinfo=timezone.utc))
         except ValueError:
             continue
+
+    now = datetime.now(timezone.utc)
+    for match in _NATURAL_DATE_RE.finditer(text):
+        dt = _parse_natural_date(match, now=now)
+        if dt is not None:
+            parsed.append(dt)
+
     return max(parsed) if parsed else None
 
 
 def _extract_latest_history_date(section_text: str) -> datetime | None:
-    """Extract the most recent YYYY-MM-DD date from an epistemic History block."""
+    """Extract the most recent parseable date from an epistemic History block."""
     history_lines: list[str] = []
     in_history = False
 
@@ -260,8 +362,8 @@ def _extract_latest_history_date(section_text: str) -> datetime | None:
 
         if stripped.startswith("## "):
             break
-        # Stop at the next epistemic field (plain or bold).
-        if field_match:
+        # Stop at the next recognized epistemic field (plain or bold).
+        if field_match and field_name in _EPISTEMIC_FIELD_NAMES and field_name != "history":
             break
 
         if stripped:
