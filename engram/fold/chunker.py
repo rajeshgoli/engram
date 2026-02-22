@@ -993,12 +993,16 @@ def next_chunk(
 
     # Pre-assign IDs
     estimates = estimate_new_entities(chunk_items)
+    thresholds = config.get("thresholds", {})
+    min_preassign_concepts = int(thresholds.get("min_preassign_concepts", 0) or 0)
+    min_preassign_epistemic = int(thresholds.get("min_preassign_epistemic", 0) or 0)
+    min_preassign_workflows = int(thresholds.get("min_preassign_workflows", 0) or 0)
     db_path = engram_dir / "engram.db"
     with IDAllocator(db_path) as allocator:
         pre_assigned = allocator.pre_assign_for_chunk(
-            new_concepts=estimates["C"],
-            new_epistemic=estimates["E"],
-            new_workflows=estimates["W"],
+            new_concepts=max(estimates["C"], min_preassign_concepts),
+            new_epistemic=max(estimates["E"], min_preassign_epistemic),
+            new_workflows=max(estimates["W"], min_preassign_workflows),
         )
 
     date_range = f"{chunk_items[0]['date'][:10]} to {chunk_items[-1]['date'][:10]}"

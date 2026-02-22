@@ -39,6 +39,12 @@ DEFAULTS: dict[str, Any] = {
         "stale_unverified_days": 30,
         "stale_epistemic_days": 90,
         "workflow_repetition": 3,
+        # Reserve a small pool of IDs for normal fold chunks so background
+        # agents can add genuinely new entries without inventing IDs even when
+        # heuristics underestimate new entities.
+        "min_preassign_concepts": 1,
+        "min_preassign_epistemic": 1,
+        "min_preassign_workflows": 1,
     },
     "budget": {
         "context_limit_chars": 600_000,
