@@ -72,6 +72,10 @@ _MONTH_TO_NUM = {
 _QUEUE_TEXT_CACHE_MAX_ENTRIES = 2048
 _QUEUE_TEXT_CACHE: OrderedDict[tuple[str, str, int, int], str] = OrderedDict()
 
+# Evidence bullets in external epistemic history files.
+_EVIDENCE_COMMIT_RE = re.compile(r"Evidence@([0-9a-fA-F]{7,40})")
+_EVIDENCE_COMMIT_DATE_CACHE: dict[tuple[str, str], datetime | None] = {}
+
 
 @dataclass
 class DriftReport:
@@ -345,6 +349,7 @@ def _extract_latest_external_history_date(
     *,
     epistemic_path: Path,
     entry_id: str | None,
+    project_root: Path | None = None,
 ) -> datetime | None:
     """Extract latest parseable date from inferred per-entry history file."""
     if not entry_id:
@@ -359,7 +364,71 @@ def _extract_latest_external_history_date(
     entry_history = extract_external_history_for_entry(history_text, entry_id)
     if not entry_history:
         return None
-    return _extract_latest_date(entry_history)
+    latest_date = _extract_latest_date(entry_history)
+    latest_evidence_date = _extract_latest_evidence_commit_date(
+        entry_history=entry_history,
+        project_root=project_root,
+    )
+    candidates = [dt for dt in (latest_date, latest_evidence_date) if dt is not None]
+    return max(candidates) if candidates else None
+
+
+def _resolve_git_commit_unix_ts(*, project_root: Path, commit: str) -> int | None:
+    """Resolve a git commit hash to a unix timestamp (seconds)."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(project_root), "show", "-s", "--format=%ct", commit],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    raw = (proc.stdout or "").strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _extract_latest_evidence_commit_date(
+    *,
+    entry_history: str,
+    project_root: Path | None,
+) -> datetime | None:
+    """Extract latest commit date referenced by Evidence@<commit> bullets.
+
+    Evidence lines in external history files are append-only and often omit
+    explicit dates. Treating the referenced commit date as "activity time"
+    prevents infinite epistemic drift triage loops.
+    """
+    if project_root is None:
+        return None
+    try:
+        root_key = str(project_root.resolve())
+    except OSError:
+        root_key = str(project_root)
+
+    commits = _EVIDENCE_COMMIT_RE.findall(entry_history)
+    if not commits:
+        return None
+
+    latest: datetime | None = None
+    for sha in commits:
+        cache_key = (root_key, sha)
+        if cache_key not in _EVIDENCE_COMMIT_DATE_CACHE:
+            ts = _resolve_git_commit_unix_ts(project_root=project_root, commit=sha)
+            _EVIDENCE_COMMIT_DATE_CACHE[cache_key] = (
+                datetime.fromtimestamp(ts, tz=timezone.utc) if ts is not None else None
+            )
+        cached = _EVIDENCE_COMMIT_DATE_CACHE[cache_key]
+        if cached is None:
+            continue
+        if latest is None or cached > latest:
+            latest = cached
+    return latest
 
 
 def _latest_epistemic_activity_date(
@@ -367,6 +436,7 @@ def _latest_epistemic_activity_date(
     epistemic_path: Path,
     section_heading: str,
     section_text: str,
+    project_root: Path | None = None,
 ) -> datetime | None:
     """Return latest activity date for an epistemic entry from inline/external history."""
     entry_id = extract_id(section_heading)
@@ -374,6 +444,7 @@ def _latest_epistemic_activity_date(
     external_date = _extract_latest_external_history_date(
         epistemic_path=epistemic_path,
         entry_id=entry_id,
+        project_root=project_root,
     )
     dates = [dt for dt in (inline_date, external_date) if dt is not None]
     return max(dates) if dates else None
@@ -495,6 +566,7 @@ def _find_claims_by_status(
             epistemic_path=epistemic_path,
             section_heading=sec["heading"],
             section_text=sec["text"],
+            project_root=None,
         )
         if latest is None:
             continue
@@ -550,6 +622,7 @@ def _find_stale_epistemic_entries(
             epistemic_path=epistemic_path,
             section_heading=sec["heading"],
             section_text=sec["text"],
+            project_root=project_root,
         )
         if latest_history is None:
             continue

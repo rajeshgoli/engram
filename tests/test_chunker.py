@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -434,6 +436,74 @@ class TestFindStaleEpistemicEntries:
         assert len(results) == 1
         assert results[0]["id"] == "E008"
         assert results[0]["status"] == "believed"
+
+    def test_evidence_commit_in_external_history_advances_activity_date(self, project):
+        if shutil.which("git") is None:
+            pytest.skip("git is required for Evidence@<commit> staleness test")
+
+        subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=project, check=True)
+        (project / "README.md").write_text("test\n")
+        subprocess.run(["git", "add", "README.md"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=project, check=True, capture_output=True)
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E087: inner structure pruning impact (believed)\n"
+            "**History:**\n"
+            f"- {old_date}: initial claim\n"
+        )
+
+        history_dir = project / "docs" / "decisions" / "epistemic_state"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        (history_dir / "E087.md").write_text(
+            "## E087: inner structure pruning impact\n"
+            f"- Evidence@{sha} docs/decisions/epistemic_state.md:1: audit update -> believed\n"
+        )
+
+        results = _find_stale_epistemic_entries(
+            epistemic,
+            days_threshold=90,
+            project_root=project,
+            queue_entries=[],
+        )
+        assert results == []
+
+    def test_unresolvable_evidence_commit_does_not_crash(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E088: some claim (believed)\n"
+            "**History:**\n"
+            f"- {old_date}: initial claim\n"
+        )
+
+        history_dir = project / "docs" / "decisions" / "epistemic_state"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        (history_dir / "E088.md").write_text(
+            "## E088: some claim\n"
+            "- Evidence@deadbeef docs/decisions/epistemic_state.md:1: unknown -> believed\n"
+        )
+
+        results = _find_stale_epistemic_entries(
+            epistemic,
+            days_threshold=90,
+            project_root=project,
+            queue_entries=[],
+        )
+        assert len(results) == 1
+        assert results[0]["id"] == "E088"
 
     def test_threshold_behavior_age_equal_not_stale(self, project):
         epistemic = project / "docs" / "decisions" / "epistemic_state.md"
