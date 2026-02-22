@@ -1090,7 +1090,7 @@ class TestNextChunk:
         assert "harness phase 0 completion" in input_text
 
     def test_workflow_synthesis_not_repeated_for_same_ids(self, project, config):
-        """workflow_synthesis should not re-fire when all CURRENT IDs were already synthesized."""
+        """workflow_synthesis should not immediately re-fire when workflows are unchanged."""
         workflows = project / "docs" / "decisions" / "workflow_registry.md"
         workflows.write_text(
             "# Workflow Registry\n\n"
@@ -1105,15 +1105,47 @@ class TestNextChunk:
         r1 = next_chunk(config, project)
         assert r1.chunk_type == "workflow_synthesis"
         assert r1.drift_entry_count == 4
+        assert "W001" in r1.input_path.read_text()
+        assert ")\n- **W002" in r1.input_path.read_text()
 
-        # Agent kept all workflows CURRENT — second call must NOT re-fire synthesis.
+        # Second call: unchanged registry triggers cooldown suppression, so we proceed with a normal fold chunk.
         r2 = next_chunk(config, project)
         assert r2.chunk_type == "fold", (
             f"Expected fold chunk after synthesis already ran, got {r2.chunk_type}"
         )
 
+    def test_workflow_synthesis_can_retry_after_cooldown(self, project, config):
+        workflows = project / "docs" / "decisions" / "workflow_registry.md"
+        workflows.write_text(
+            "# Workflow Registry\n\n"
+            "## W001: deploy_process (CURRENT)\n- **Context:** Deploy.\n\n"
+            "## W002: review_process (CURRENT)\n- **Context:** Review.\n\n"
+            "## W003: test_process (CURRENT)\n- **Context:** Test.\n\n"
+            "## W004: release_process (CURRENT)\n- **Context:** Release.\n\n"
+        )
+
+        config["budget"]["max_chunk_chars"] = 60
+        items = [_make_doc_item(chars=60, path=f"docs/working/{i}.md") for i in range(10)]
+        for item in items:
+            p = project / item["path"]
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("x")
+        _write_queue(project, items)
+
+        first = next_chunk(config, project)
+        assert first.chunk_type == "workflow_synthesis"
+
+        # Produce 5 fold chunks during cooldown.
+        for _ in range(5):
+            nxt = next_chunk(config, project)
+            assert nxt.chunk_type == "fold"
+
+        # Cooldown expired, unchanged registry can re-trigger synthesis.
+        retried = next_chunk(config, project)
+        assert retried.chunk_type == "workflow_synthesis"
+
     def test_workflow_synthesis_fires_when_new_workflows_added(self, project, config):
-        """workflow_synthesis must re-fire when new workflow IDs appear after a prior synthesis."""
+        """workflow_synthesis must re-fire when workflow_registry changes after a prior attempt."""
         workflows = project / "docs" / "decisions" / "workflow_registry.md"
         workflows.write_text(
             "# Workflow Registry\n\n"
@@ -1148,7 +1180,7 @@ class TestNextChunk:
         assert r2.drift_entry_count == 7
 
     def test_workflow_synthesis_malformed_manifest_degrades_gracefully(self, project, config):
-        """A malformed manifest must not abort next_chunk — synthesis fires as if no prior run."""
+        """A malformed manifest must not abort next_chunk — synthesis fires as if no prior attempt."""
         workflows = project / "docs" / "decisions" / "workflow_registry.md"
         workflows.write_text(
             "# Workflow Registry\n\n"
@@ -1159,7 +1191,7 @@ class TestNextChunk:
         )
         # Write a malformed manifest
         manifest = project / ".engram" / "chunks_manifest.yaml"
-        manifest.write_text("- id: 1\n  type: workflow_synthesis\n  workflow_ids: [W001\n  bad yaml here\n")
+        manifest.write_text("- id: 1\n  type: workflow_synthesis\n  workflow_registry_hash: [\n  bad yaml here\n")
 
         _write_queue(project, [_make_doc_item(chars=100)])
 

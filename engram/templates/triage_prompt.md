@@ -104,7 +104,7 @@ Treat them as append-only logs: decide from main living docs + temporal worktree
 then append one concise bullet via Bash per retained claim.
 
 {% for e in entries %}
-- **{{ e.name }}**{% if e.id %} ({{ e.id }}){% endif %}: {{ e.days_old }} days stale (last history: {{ e.last_date }})
+- **{{ e.name }}**{{ " (" ~ e.id ~ ")" if e.id else "" }}: {{ e.days_old }} days stale (last history: {{ e.last_date }})
 {% endfor %}
 
 ({{ entry_count }} stale epistemic entries to audit)
@@ -120,7 +120,7 @@ For each claim below:
 - **Keep contested** only if genuinely unresolved with active investigation.
 
 {% for e in entries %}
-- **{{ e.name }}**{% if e.id %} ({{ e.id }}){% endif %}: {{ e.days_old }} days unresolved (since {{ e.last_date }})
+- **{{ e.name }}**{{ " (" ~ e.id ~ ")" if e.id else "" }}: {{ e.days_old }} days unresolved (since {{ e.last_date }})
 {% endfor %}
 
 ({{ entry_count }} contested claims to review)
@@ -136,7 +136,7 @@ For each claim below:
 - **Flag** if verification requires external action. Add Agent guidance with specific steps.
 
 {% for e in entries %}
-- **{{ e.name }}**{% if e.id %} ({{ e.id }}){% endif %}: {{ e.days_old }} days unverified (since {{ e.last_date }})
+- **{{ e.name }}**{{ " (" ~ e.id ~ ")" if e.id else "" }}: {{ e.days_old }} days unverified (since {{ e.last_date }})
 {% endfor %}
 
 ({{ entry_count }} stale unverified claims to review)
@@ -152,7 +152,7 @@ For each cluster of related workflows:
 - **Supersede** if one replaces another. Mark old as SUPERSEDED → W{new}.
 
 {% for w in entries %}
-- **{{ w.name }}**{% if w.id %} ({{ w.id }}){% endif %}
+- **{{ w.name }}**{{ " (" ~ w.id ~ ")" if w.id else "" }}
 {% endfor %}
 
 ({{ entry_count }} workflow entries to review for synthesis)
