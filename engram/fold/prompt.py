@@ -45,7 +45,6 @@ def render_chunk_input(
     chunk_id: int,
     date_range: str,
     items_content: str,
-    orphan_advisory: str,
     pre_assigned_ids: dict[str, list[str]],
     doc_paths: dict[str, Path],
 ) -> str:
@@ -66,9 +65,6 @@ def render_chunk_input(
     content = instructions
     content += f"\n# New Content ({date_range})\n"
     content += f"# Chunk {chunk_id}\n\n"
-
-    if orphan_advisory:
-        content += orphan_advisory
 
     content += items_content
     return content
@@ -181,7 +177,7 @@ def render_agent_prompt(
         f"- USER PROMPTS encode the project owner's intent — they are authoritative\n"
         f"- DEAD/refuted entries: 1-2 sentences max. Key lesson + what replaced it.\n"
         f"- Process ALL items in the chunk\n"
-        f"- Use ONLY pre-assigned IDs for new entries (listed in the input file)\n"
+        f"- Use ONLY IDs listed under 'Pre-assigned IDs for this chunk'. If none are listed, do NOT create new IDs in this chunk.\n"
         f"\n"
         f"After All Edits: Lint Check (Required)\n"
         f"\n"
