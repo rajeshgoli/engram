@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import subprocess
+import hashlib
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -654,34 +655,40 @@ def _find_stale_epistemic_entries(
     return results
 
 
-def _read_synthesized_workflow_ids(manifest_file: Path) -> set[str]:
-    """Return workflow IDs already covered in a previous synthesis chunk.
+def _read_last_workflow_synthesis_attempt(manifest_file: Path) -> dict[str, Any] | None:
+    """Return the most recent workflow_synthesis manifest entry, if any.
 
-    Reads ``chunks_manifest.yaml`` and collects every workflow ID recorded
-    under a ``workflow_synthesis`` entry.  These are excluded from the next
-    synthesis trigger so the fold doesn't loop infinitely when an agent
-    decides to keep all workflows as CURRENT.
+    This is used for a *cooldown* mechanism to avoid infinite drift loops when
+    synthesis is repeatedly attempted but workflows remain unchanged.
     """
     if not manifest_file.exists():
-        return set()
-    import yaml  # local import — yaml is a standard engram dependency
+        return None
+    import yaml
 
     try:
         with open(manifest_file) as fh:
             manifest = yaml.safe_load(fh) or []
     except yaml.YAMLError as exc:
-        log.warning("Could not parse %s — skipping synthesis dedup: %s", manifest_file, exc)
-        return set()
-    synthesized: set[str] = set()
-    for entry in manifest:
+        log.warning("Could not parse %s — skipping workflow synthesis cooldown: %s", manifest_file, exc)
+        return None
+
+    if not isinstance(manifest, list):
+        return None
+
+    for entry in reversed(manifest):
         if not isinstance(entry, dict):
             continue
         if entry.get("type") == "workflow_synthesis":
-            wids = entry.get("workflow_ids", [])
-            if isinstance(wids, list):
-                for wid in wids:
-                    synthesized.add(wid)
-    return synthesized
+            return entry
+    return None
+
+
+def _sha256_file_text(path: Path) -> str | None:
+    try:
+        text = path.read_text()
+    except OSError:
+        return None
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _find_workflow_repetitions(workflows_path: Path) -> list[dict]:
@@ -876,17 +883,27 @@ def next_chunk(
     # Check drift priorities
     drift = scan_drift(config, project_root, fold_from=fold_from)
 
-    # Suppress synthesis only when every CURRENT workflow was already covered
-    # in a prior synthesis chunk.  If any new ID exists, fire with the full
-    # set so the threshold retains its original semantics (total CURRENT count).
-    synthesized_ids = _read_synthesized_workflow_ids(manifest_file)
-    if synthesized_ids and drift.workflow_repetitions:
-        # If any workflow lacks a stable ID, skip dedup — can't safely assert
-        # "all synthesized" when some entries are unidentifiable.
-        all_have_ids = all(w.get("id") for w in drift.workflow_repetitions)
-        if all_have_ids:
-            current_ids = {w["id"] for w in drift.workflow_repetitions}
-            if current_ids.issubset(synthesized_ids):
+    # Workflow synthesis cooldown:
+    # - Avoid infinite workflow_synthesis drift loops when an agent doesn't merge workflows.
+    # - Do NOT assume synthesis "completed" just because a chunk was generated.
+    cooldown_chunks = int(config.get("thresholds", {}).get("workflow_synthesis_cooldown_chunks", 5))
+    if drift.workflow_repetitions:
+        workflows_path = doc_paths.get("workflows")
+        if workflows_path and workflows_path.exists():
+            current_hash = _sha256_file_text(workflows_path)
+        else:
+            current_hash = None
+
+        last_attempt = _read_last_workflow_synthesis_attempt(manifest_file)
+        if (
+            current_hash
+            and last_attempt
+            and last_attempt.get("workflow_registry_hash") == current_hash
+            and isinstance(last_attempt.get("id"), int)
+        ):
+            existing = list(chunks_dir.glob("chunk_*_input.md"))
+            chunk_id_preview = len(existing) + 1
+            if chunk_id_preview - last_attempt["id"] <= cooldown_chunks:
                 drift.workflow_repetitions = []
 
     thresholds = config.get("thresholds", {})
@@ -941,8 +958,11 @@ def next_chunk(
                 f"  input_file: {input_path.name}\n"
             )
             if drift_type == "workflow_synthesis":
-                wids = [w["id"] for w in drift.workflow_repetitions if w.get("id")]
-                fh.write(f"  workflow_ids: {wids}\n")
+                workflows_path = doc_paths.get("workflows")
+                if workflows_path:
+                    wf_hash = _sha256_file_text(workflows_path)
+                    if wf_hash:
+                        fh.write(f"  workflow_registry_hash: {wf_hash}\n")
 
         return ChunkResult(
             chunk_id=chunk_id,
