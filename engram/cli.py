@@ -210,6 +210,8 @@ def next_chunk_cmd(project_root: str) -> None:
     root = Path(project_root)
     config = load_config(root)
 
+    _enforce_single_active_chunk(root)
+
     db = ServerDB(root / ".engram" / "engram.db")
     fold_from = db.get_fold_from()
 
@@ -241,6 +243,108 @@ def next_chunk_cmd(project_root: str) -> None:
     click.echo(f"  Written: {result.input_path}")
     click.echo(f"  Prompt: {result.prompt_path}")
     click.echo(f"  Remaining in queue: {result.remaining_queue}")
+
+    _write_active_chunk_lock(root, result)
+
+
+@cli.command("clear-active-chunk")
+@click.option(
+    "--project-root",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    default=".",
+    help="Project root directory (default: cwd).",
+)
+def clear_active_chunk_cmd(project_root: str) -> None:
+    """Clear the active chunk lock (recovery for aborted/failed chunk processing)."""
+    root = Path(project_root)
+    lock_path = _active_chunk_lock_path(root)
+    if lock_path.exists():
+        lock_path.unlink()
+        click.echo(f"Cleared active chunk lock: {lock_path}")
+    else:
+        click.echo("No active chunk lock present.")
+
+
+def _active_chunk_lock_path(project_root: Path) -> Path:
+    return project_root / ".engram" / "active_chunk.yaml"
+
+
+def _enforce_single_active_chunk(project_root: Path) -> None:
+    """Prevent generating multiple chunks before processing the active one."""
+    import re
+    import subprocess
+
+    import yaml
+
+    lock_path = _active_chunk_lock_path(project_root)
+    if not lock_path.exists():
+        return
+
+    try:
+        lock = yaml.safe_load(lock_path.read_text()) or {}
+    except OSError:
+        return
+
+    chunk_id = lock.get("chunk_id")
+    if not isinstance(chunk_id, int):
+        return
+
+    # Auto-clear lock if git history indicates the chunk was processed.
+    # This is a best-effort heuristic for CLI-driven workflows.
+    try:
+        ok = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        inside = ok.returncode == 0 and ok.stdout.strip() == "true"
+    except OSError:
+        inside = False
+
+    if inside:
+        try:
+            log = subprocess.run(
+                ["git", "log", "-n", "200", "--format=%s"],
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            subjects = log.stdout or ""
+        except OSError:
+            subjects = ""
+
+        if re.search(rf"Knowledge fold: chunk(?:_| )0*{chunk_id}\\b", subjects):
+            lock_path.unlink()
+            return
+
+    input_path = lock.get("input_path", "<unknown>")
+    raise click.ClickException(
+        "Active chunk lock present. Process the existing chunk before generating a new one:\n"
+        f"  chunk_id: {chunk_id}\n"
+        f"  input: {input_path}\n"
+        "To override (abandon and regenerate), run:\n"
+        f"  engram clear-active-chunk --project-root {project_root}\n"
+    )
+
+
+def _write_active_chunk_lock(project_root: Path, result: object) -> None:
+    from datetime import datetime, timezone
+
+    import yaml
+
+    lock_path = _active_chunk_lock_path(project_root)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "chunk_id": getattr(result, "chunk_id", None),
+        "chunk_type": getattr(result, "chunk_type", None),
+        "input_path": str(getattr(result, "input_path", "")),
+        "prompt_path": str(getattr(result, "prompt_path", "")),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    lock_path.write_text(yaml.safe_dump(payload, sort_keys=True))
 
 
 @cli.command()

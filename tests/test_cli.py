@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -127,3 +128,42 @@ class TestMigrateEpistemicHistory:
         assert "**History:**" not in updated
         history_file = project_dir / "docs" / "decisions" / "epistemic_state" / "E005.md"
         assert history_file.exists()
+
+
+class TestActiveChunkLock:
+    def test_next_chunk_blocks_when_active_lock_present(self, runner: CliRunner, project_dir: Path) -> None:
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        # Create docs referenced by the queue
+        a = project_dir / "docs" / "working" / "a.md"
+        b = project_dir / "docs" / "working" / "b.md"
+        a.parent.mkdir(parents=True, exist_ok=True)
+        a.write_text("# A\n")
+        b.write_text("# B\n")
+
+        queue_file = project_dir / ".engram" / "queue.jsonl"
+        entries = [
+            {"date": "2026-01-01T00:00:00", "type": "doc", "path": "docs/working/a.md", "chars": 150000, "pass": "initial"},
+            {"date": "2026-01-02T00:00:00", "type": "doc", "path": "docs/working/b.md", "chars": 150000, "pass": "initial"},
+        ]
+        queue_file.write_text("".join(json.dumps(e) + "\n" for e in entries))
+
+        # First generation should succeed and write lock
+        r1 = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
+        assert r1.exit_code == 0
+        lock_path = project_dir / ".engram" / "active_chunk.yaml"
+        assert lock_path.exists()
+
+        # Second generation should fail fast due to active lock
+        r2 = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
+        assert r2.exit_code != 0
+        assert "Active chunk lock present" in r2.output
+
+        # Clearing the lock should allow generating the next chunk
+        rc = runner.invoke(cli, ["clear-active-chunk", "--project-root", str(project_dir)])
+        assert rc.exit_code == 0
+        assert not lock_path.exists()
+
+        r3 = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
+        assert r3.exit_code == 0

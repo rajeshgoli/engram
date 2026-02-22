@@ -1044,6 +1044,32 @@ class TestNextChunk:
         assert "knowledge fold chunk" in prompt_text
         assert "Pre-assigned IDs for this chunk" in prompt_text
 
+    def test_pre_assigned_ids_do_not_collide_with_existing_doc_ids(self, project, config):
+        # Seed living docs with high existing IDs (simulates fresh allocator DB behind docs)
+        (project / "docs" / "decisions" / "concept_registry.md").write_text(
+            "# Concept Registry\n\n## C107: existing (ACTIVE)\n- **Code:** x\n",
+        )
+        (project / "docs" / "decisions" / "epistemic_state.md").write_text(
+            "# Epistemic State\n\n## E101: existing (believed)\n**Current position:** x\n**Agent guidance:** x\n",
+        )
+        (project / "docs" / "decisions" / "workflow_registry.md").write_text(
+            "# Workflow Registry\n\n## W001: existing (CURRENT)\n- **Context:** x\n- **Trigger:** x\n",
+        )
+
+        doc_path = project / "docs" / "working" / "spec.md"
+        doc_path.parent.mkdir(parents=True, exist_ok=True)
+        doc_path.write_text("# Test Spec\nContent\n")
+
+        item = _make_doc_item(path="docs/working/spec.md", chars=100, date="2026-01-06T00:00:00")
+        item["entity_hints"] = [{"category": "C"}, {"category": "E"}, {"category": "W"}]
+        _write_queue(project, [item])
+
+        result = next_chunk(config, project)
+        assert result.chunk_type == "fold"
+        assert result.pre_assigned_ids["C"] == ["C108"]
+        assert result.pre_assigned_ids["E"] == ["E102"]
+        assert result.pre_assigned_ids["W"] == ["W002"]
+
     def test_fold_chunk_does_not_include_orphan_triage_section(self, project, config):
         registry = project / "docs" / "decisions" / "concept_registry.md"
         registry.write_text(

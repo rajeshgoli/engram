@@ -166,6 +166,17 @@ class TestPreAssign:
         assert r1["C"] == ["C001", "C002", "C003"]
         assert r2["C"] == ["C004", "C005", "C006"]
 
+    def test_pre_assign_respects_min_next_ids(self, allocator: IDAllocator) -> None:
+        r1 = allocator.pre_assign_for_chunk(new_concepts=2, min_next_ids={"C": 42})
+        assert r1["C"] == ["C042", "C043"]
+        assert allocator.peek("C") == 44
+
+    def test_pre_assign_min_next_ids_does_not_move_backwards(self, allocator: IDAllocator) -> None:
+        allocator.pre_assign_for_chunk(new_concepts=3)  # C001-C003, next=4
+        r2 = allocator.pre_assign_for_chunk(new_concepts=1, min_next_ids={"C": 2})
+        assert r2["C"] == ["C004"]
+        assert allocator.peek("C") == 5
+
 
 # ------------------------------------------------------------------
 # Concurrent safety
