@@ -1,4 +1,4 @@
-# Ticket 28 — Workflow synthesis formatting + safe cooldown
+# Ticket 57 — Workflow synthesis formatting + safe cooldown
 
 ## Problems
 
@@ -51,4 +51,3 @@ were “synthesized”, and engram may skip re-triggering synthesis even though 
 ## Classification
 
 Single ticket.
-
