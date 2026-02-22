@@ -14,14 +14,17 @@ Read the new content below, then edit the 4 living docs using your file editing 
 Every entry uses a permanent stable ID: C### for concepts, E### for claims, W### for workflows.
 IDs survive renames, refactoring, and evolution. Never reuse an ID.
 
-{% if pre_assigned_ids %}
 ### Pre-assigned IDs for this chunk
 
 Use ONLY these IDs for new entries. Do NOT invent your own.
+If no IDs are listed, do NOT create new entries/IDs in this chunk.
 
+{% if pre_assigned_ids %}
 {% for cat, ids in pre_assigned_ids.items() %}
 - {{ cat }}: {{ ids | join(', ') }}
 {% endfor %}
+{% else %}
+- (none)
 {% endif %}
 
 ## Entry Formats
@@ -110,3 +113,4 @@ Graveyard files are append-only. Never edit existing graveyard entries.
 - Do NOT add entries about the fold process itself.
 - When a concept's source files are deleted, mark it DEAD.
 - When an ORPHANED CONCEPTS section is present, triage each one.
+- Treat repo paths as case-sensitive. Do not copy paths from issues/comments into living docs unless you are confident the casing matches the repo. If unsure, omit the path or use the repo-canonical casing already used elsewhere.

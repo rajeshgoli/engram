@@ -1008,29 +1008,10 @@ def next_chunk(
     for item in chunk_items:
         items_content += _render_item_content(item, project_root)
 
-    # Include orphan advisory (below threshold, informational)
-    orphan_advisory = ""
-    if drift.orphaned_concepts:
-        orphan_advisory = (
-            "## [ORPHANED CONCEPTS] Active concepts with missing source files\n\n"
-        )
-        if fold_from and ref_commit:
-            orphan_advisory += (
-                f"**Note:** Living docs are current through {fold_from} "
-                f"(commit `{ref_commit[:12]}`). "
-                f"Only files missing at that commit are listed.\n\n"
-            )
-        for o in drift.orphaned_concepts:
-            orphan_advisory += f"- **{o['name']}**: {', '.join(o['paths'])}\n"
-        orphan_advisory += (
-            f"\n({len(drift.orphaned_concepts)} orphaned concepts found)\n\n---\n\n"
-        )
-
     input_content = render_chunk_input(
         chunk_id=chunk_id,
         date_range=date_range,
         items_content=items_content,
-        orphan_advisory=orphan_advisory,
         pre_assigned_ids=pre_assigned,
         doc_paths=doc_paths,
     )
