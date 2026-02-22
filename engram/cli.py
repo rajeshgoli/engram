@@ -316,7 +316,7 @@ def _enforce_single_active_chunk(project_root: Path) -> None:
         except OSError:
             subjects = ""
 
-        if re.search(rf"Knowledge fold: chunk(?:_| )0*{chunk_id}\\b", subjects):
+        if re.search(rf"Knowledge fold: chunk(?:_| )0*{chunk_id}\b", subjects):
             lock_path.unlink()
             return
 
