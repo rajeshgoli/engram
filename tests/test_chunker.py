@@ -1036,11 +1036,32 @@ class TestNextChunk:
         # Verify input file content
         input_text = result.input_path.read_text()
         assert "# Instructions" in input_text
+        assert "Pre-assigned IDs for this chunk" in input_text
         assert "Content for the chunk." in input_text
 
         # Verify prompt file content
         prompt_text = result.prompt_path.read_text()
         assert "knowledge fold chunk" in prompt_text
+        assert "Pre-assigned IDs for this chunk" in input_text
+
+    def test_fold_chunk_does_not_include_orphan_triage_section(self, project, config):
+        registry = project / "docs" / "decisions" / "concept_registry.md"
+        registry.write_text(
+            "# Concept Registry\n\n"
+            "## C001: orphaned_concept (ACTIVE)\n"
+            "- **Code:** missing/thing.py\n"
+        )
+        config["thresholds"]["orphan_triage"] = 50  # ensure drift doesn't trigger triage
+
+        doc_path = project / "docs" / "working" / "spec.md"
+        doc_path.parent.mkdir(parents=True, exist_ok=True)
+        doc_path.write_text("Content")
+        _write_queue(project, [_make_doc_item(chars=100)])
+
+        result = next_chunk(config, project)
+        assert result.chunk_type == "fold"
+        input_text = result.input_path.read_text()
+        assert "[ORPHANED CONCEPTS]" not in input_text
 
     def test_drift_triage_chunk(self, project, config):
         # Create orphaned concepts exceeding threshold (3)
