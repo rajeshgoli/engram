@@ -1042,7 +1042,7 @@ class TestNextChunk:
         # Verify prompt file content
         prompt_text = result.prompt_path.read_text()
         assert "knowledge fold chunk" in prompt_text
-        assert "Pre-assigned IDs for this chunk" in input_text
+        assert "Pre-assigned IDs for this chunk" in prompt_text
 
     def test_fold_chunk_does_not_include_orphan_triage_section(self, project, config):
         registry = project / "docs" / "decisions" / "concept_registry.md"
