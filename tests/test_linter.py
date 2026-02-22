@@ -647,23 +647,13 @@ class TestMissingSections:
 # ======================================================================
 
 class TestIdCompliance:
-    def test_all_pre_assigned_present(self) -> None:
+    def test_new_ids_in_pre_assigned_pass(self) -> None:
         before: dict[str, str] = {"concepts": "", "epistemic": ""}
         after = {
             "concepts": "## C010: new_thing (ACTIVE)\n- **Code:** `f.py`\n",
             "epistemic": "## E005: new_claim (believed)\n**Evidence:** data\n",
         }
         assert check_id_compliance(after, ["C010", "E005"], before) == []
-
-    def test_missing_pre_assigned_id(self) -> None:
-        before: dict[str, str] = {"concepts": ""}
-        after = {
-            "concepts": "## C010: new_thing (ACTIVE)\n- **Code:** `f.py`\n",
-        }
-        violations = check_id_compliance(after, ["C010", "E005"], before)
-        assert len(violations) == 1
-        assert "E005" in violations[0].message
-        assert "not found in output" in violations[0].message
 
     def test_agent_invented_id_flagged(self) -> None:
         """IDs in output that weren't pre-assigned and didn't exist before."""
@@ -696,12 +686,10 @@ class TestIdCompliance:
     def test_empty_pre_assigned_skipped(self) -> None:
         assert check_id_compliance({"concepts": ""}, []) == []
 
-    def test_no_before_contents_still_checks_missing(self) -> None:
-        """Without before_contents, invented IDs can't be detected but missing still works."""
-        after = {"concepts": ""}
-        violations = check_id_compliance(after, ["C010"])
-        assert len(violations) == 1
-        assert "C010" in violations[0].message
+    def test_no_before_contents_no_invented_check(self) -> None:
+        """Without before_contents, invented IDs can't be reliably detected."""
+        after = {"concepts": "## C010: new (ACTIVE)\n- **Code:** `f.py`\n"}
+        assert check_id_compliance(after, ["C010"]) == []
 
 
 # ======================================================================
@@ -825,7 +813,7 @@ class TestLintPostDispatch:
         assert any("C001" in v.message and "missing" in v.message
                     for v in result.violations)
 
-    def test_missing_pre_assigned_id(self) -> None:
+    def test_unused_pre_assigned_ids_allowed(self) -> None:
         before = {"concepts": "", "epistemic": "", "workflows": "", "timeline": ""}
         after = {
             "concepts": "## C010: new (ACTIVE)\n- **Code:** `f.py`\n",
@@ -837,8 +825,7 @@ class TestLintPostDispatch:
             before, after,
             pre_assigned_ids=["C010", "E005"],
         )
-        assert not result.passed
-        assert any("E005" in v.message for v in result.violations)
+        assert result.passed
 
     def test_agent_invented_id_in_post_dispatch(self) -> None:
         """Agent invents C099 which wasn't pre-assigned or pre-existing."""

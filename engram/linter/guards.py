@@ -83,12 +83,16 @@ def check_id_compliance(
     pre_assigned_ids: list[str],
     before_contents: dict[str, str] | None = None,
 ) -> list[Violation]:
-    """Verify pre-assigned IDs appear in output and no extras were invented.
+    """Verify no agent-invented IDs were introduced.
 
-    Checks both directions:
-    1. Every pre-assigned ID must appear as a heading in the output.
-    2. Every NEW ID in the output (not present before dispatch) must be
-       in the pre-assigned set. Agent-invented IDs are violations.
+    Checks:
+    - Every NEW ID in the output (not present before dispatch) must be
+      in the pre-assigned set. Agent-invented IDs are violations.
+
+    Note:
+    Pre-assigned IDs are a reserved pool; they may be unused in chunks that
+    only update existing entries. The guard must NOT fail just because some
+    reserved IDs were not consumed.
 
     Parameters
     ----------
@@ -124,16 +128,7 @@ def check_id_compliance(
 
     pre_assigned_set = set(pre_assigned_ids)
 
-    # Check 1: pre-assigned IDs should appear in the output
-    missing = pre_assigned_set - all_after_ids
-    for entry_id in sorted(missing):
-        violations.append(Violation(
-            "guard", entry_id,
-            f"Pre-assigned ID '{entry_id}' not found in output. "
-            f"Fold agent did not create the expected entry.",
-        ))
-
-    # Check 2: new IDs in output must be in the pre-assigned set
+    # New IDs in output must be in the pre-assigned set.
     new_ids = all_after_ids - all_before_ids
     invented = new_ids - pre_assigned_set
     for entry_id in sorted(invented):
