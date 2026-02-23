@@ -8,7 +8,7 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader
 
-from engram.epistemic_history import infer_current_dir, infer_history_dir
+from engram.epistemic_history import detect_epistemic_layout
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
@@ -35,14 +35,16 @@ def _stringify_paths(doc_paths: dict[str, Path]) -> dict[str, str]:
     return {k: str(v) for k, v in doc_paths.items()}
 
 
-def _epistemic_history_dir_str(doc_paths: dict[str, Path]) -> str:
-    """Infer history directory path for epistemic per-ID history files."""
-    return str(infer_history_dir(doc_paths["epistemic"]))
-
-
-def _epistemic_current_dir_str(doc_paths: dict[str, Path]) -> str:
-    """Infer mutable current-state directory for epistemic per-ID files."""
-    return str(infer_current_dir(doc_paths["epistemic"]))
+def _epistemic_layout_template_vars(doc_paths: dict[str, Path]) -> dict[str, str]:
+    """Resolve epistemic layout vars for template/prompt rendering."""
+    layout = detect_epistemic_layout(doc_paths["epistemic"])
+    return {
+        "epistemic_layout_mode": layout.mode,
+        "epistemic_current_dir": str(layout.current_dir) if layout.current_dir else "",
+        "epistemic_history_dir": str(layout.history_dir),
+        "epistemic_history_glob": layout.file_glob,
+        "epistemic_history_ext": layout.extension,
+    }
 
 
 def render_chunk_input(
@@ -60,11 +62,11 @@ def render_chunk_input(
     """
     env = _get_env()
     template = env.get_template("fold_prompt.md")
+    layout_vars = _epistemic_layout_template_vars(doc_paths)
 
     instructions = template.render(
         doc_paths=_stringify_paths(doc_paths),
-        epistemic_current_dir=_epistemic_current_dir_str(doc_paths),
-        epistemic_history_dir=_epistemic_history_dir_str(doc_paths),
+        **layout_vars,
         pre_assigned_ids=pre_assigned_ids,
     )
 
@@ -94,6 +96,7 @@ def render_triage_input(
     """
     env = _get_env()
     template = env.get_template("triage_prompt.md")
+    layout_vars = _epistemic_layout_template_vars(doc_paths)
 
     if drift_type == "orphan_triage":
         entries = drift_report.orphaned_concepts
@@ -119,8 +122,7 @@ def render_triage_input(
         entries=entries,
         chunk_id=chunk_id,
         doc_paths=_stringify_paths(doc_paths),
-        epistemic_current_dir=_epistemic_current_dir_str(doc_paths),
-        epistemic_history_dir=_epistemic_history_dir_str(doc_paths),
+        **layout_vars,
         entry_count=len(entries),
         ref_commit=ref_commit,
         ref_date=ref_date,
@@ -154,8 +156,26 @@ def render_agent_prompt(
         if project_root
         else "engram lint --project-root <project_root>"
     )
-    epistemic_history_dir = _epistemic_history_dir_str(doc_paths)
-    epistemic_current_dir = _epistemic_current_dir_str(doc_paths)
+    layout_vars = _epistemic_layout_template_vars(doc_paths)
+    epistemic_mode = layout_vars["epistemic_layout_mode"]
+    epistemic_history_dir = layout_vars["epistemic_history_dir"]
+    epistemic_history_glob = layout_vars["epistemic_history_glob"]
+    epistemic_current_dir = layout_vars["epistemic_current_dir"]
+
+    if epistemic_mode == "legacy":
+        epistemic_constraints = (
+            f"- This project uses legacy per-ID epistemic files under "
+            f"{epistemic_history_dir}/{epistemic_history_glob}.\n"
+            f"- Do NOT create split `current/` or `history/` epistemic files unless explicitly migrating.\n"
+            f"- Do NOT read per-ID epistemic files under {epistemic_history_dir}/{epistemic_history_glob}.\n"
+            f"  They are append-only logs in this project; append via Bash without opening them.\n"
+        )
+    else:
+        epistemic_constraints = (
+            f"- Epistemic current-state files live under {epistemic_current_dir}/E*.em and are editable.\n"
+            f"- Do NOT read per-ID epistemic history files under {epistemic_history_dir}/E*.em.\n"
+            f"  They are append-only logs; when needed, append via Bash without opening them.\n"
+        )
 
     return (
         f"You are processing a knowledge fold chunk.\n"
@@ -164,9 +184,7 @@ def render_agent_prompt(
         f"- Do NOT use the Task tool or spawn sub-agents. Do all work directly.\n"
         f"- Do NOT use Write to overwrite entire files. Use Edit for surgical updates only.\n"
         f"- Be SUCCINCT. High information density, no filler, no narrative prose.\n"
-        f"- Epistemic current-state files live under {epistemic_current_dir}/E*.em and are editable.\n"
-        f"- Do NOT read per-ID epistemic history files under {epistemic_history_dir}/E*.em.\n"
-        f"  They are append-only logs; when needed, append via Bash without opening them.\n"
+        f"{epistemic_constraints}"
         f"\n"
         f"Read the input file at {input_path.resolve()} — it contains system instructions\n"
         f"and new content covering {date_range}.\n"

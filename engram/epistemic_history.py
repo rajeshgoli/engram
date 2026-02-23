@@ -11,6 +11,7 @@ Legacy compatibility:
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -35,6 +36,17 @@ _FIELD_PATTERNS = [
 ]
 
 _ENTRY_HEADING_RE = re.compile(r"^##\s+(E\d{3,})\b", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class EpistemicLayout:
+    """Resolved per-ID epistemic file layout for a project."""
+
+    mode: str  # "split" | "legacy"
+    current_dir: Path | None
+    history_dir: Path
+    file_glob: str
+    extension: str
 
 
 def _parse_field_header(normalized_line: str) -> tuple[str, str] | None:
@@ -114,6 +126,52 @@ def infer_history_candidates(epistemic_doc_path: Path, entry_id: str) -> list[Pa
     if primary == legacy:
         return [primary]
     return [primary, legacy]
+
+
+def detect_epistemic_layout(epistemic_doc_path: Path) -> EpistemicLayout:
+    """Detect whether project uses split or legacy per-ID epistemic files.
+
+    Detection order:
+    1) If split dirs/files are present, use split layout.
+    2) Else if legacy ``E*.md`` files are present, use legacy layout.
+    3) Else default to split layout for new projects.
+    """
+    base = infer_epistemic_dir(epistemic_doc_path)
+    current_dir = infer_current_dir(epistemic_doc_path)
+    history_dir = infer_history_dir(epistemic_doc_path)
+
+    split_present = (
+        current_dir.exists()
+        or history_dir.exists()
+        or bool(list(current_dir.glob("E*.em")))
+        or bool(list(history_dir.glob("E*.em")))
+    )
+    if split_present:
+        return EpistemicLayout(
+            mode="split",
+            current_dir=current_dir,
+            history_dir=history_dir,
+            file_glob="E*.em",
+            extension=".em",
+        )
+
+    legacy_present = bool(list(base.glob("E*.md")))
+    if legacy_present:
+        return EpistemicLayout(
+            mode="legacy",
+            current_dir=None,
+            history_dir=base,
+            file_glob="E*.md",
+            extension=".md",
+        )
+
+    return EpistemicLayout(
+        mode="split",
+        current_dir=current_dir,
+        history_dir=history_dir,
+        file_glob="E*.em",
+        extension=".em",
+    )
 
 
 def extract_external_history_for_entry(history_text: str, entry_id: str) -> str | None:

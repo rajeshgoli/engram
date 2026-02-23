@@ -89,6 +89,8 @@ Graveyard files are append-only. Never edit existing graveyard entries.
 - Most information-dense items. A single sentence often encodes a major decision.
 - They reveal: intent, corrections, decisions, priorities, dead ends, rationale
 - Read as conversation threads — sequence within a session tells a story
+- Prompt lines like `[Pasted text #N +M lines]` are placeholder markers for omitted pasted blocks.
+  Treat them as "user pasted external context" signals, not literal project facts.
 - When prompts contradict docs/issues, the prompt is authoritative
 
 ## Style
@@ -100,10 +102,16 @@ Graveyard files are append-only. Never edit existing graveyard entries.
 - Workflow registry: structured fields only. Context + trigger/method.
 - DEAD/refuted entries: 1-2 sentences max. Key lesson + replacement.
 - **Budget matters.** Every line stays in context for future chunks. Be ruthless about cutting words.
+{% if epistemic_layout_mode == "split" %}
 - For epistemic entries, use inferred per-ID files:
   - Mutable current state (rewrite when E{NNN} changes): `{{ epistemic_current_dir }}/E{NNN}.em`
   - Append-only history log (append only): `{{ epistemic_history_dir }}/E{NNN}.em`
 - Keep `{{ doc_paths.epistemic }}` concise. Put detailed, coherent per-claim state in the current file.
+{% else %}
+- This repo uses legacy per-ID epistemic files: `{{ epistemic_history_dir }}/E{NNN}.md`
+  (single-file current+history layout).
+- Keep using the existing legacy layout for this chunk. Do NOT create split `current/` or `history/` files.
+{% endif %}
 
 ## Important
 

@@ -462,6 +462,35 @@ class TestTriagePromptTemporalContext:
         assert "/epistemic_state/history/E{NNN}.em" in output
         assert "/epistemic_state/current/E{NNN}.em" in output
 
+    def test_epistemic_audit_uses_legacy_paths_when_legacy_files_exist(self, tmp_path: Path) -> None:
+        from engram.fold.prompt import render_triage_input
+        from engram.fold.chunker import DriftReport
+
+        drift = DriftReport(
+            epistemic_audit=[{
+                "name": "E008: Harness Phase 0 completion (believed)",
+                "id": "E008",
+                "days_old": 72,
+                "last_date": "2025-12-11",
+            }],
+        )
+        doc_paths = _fake_doc_paths(tmp_path)
+        legacy = tmp_path / "docs" / "decisions" / "epistemic_state" / "E008.md"
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text("## E008: legacy\n")
+
+        output = render_triage_input(
+            drift_type="epistemic_audit",
+            drift_report=drift,
+            chunk_id=13,
+            doc_paths=doc_paths,
+            ref_commit="abc123def456789012345678901234567890abcd",
+            ref_date="2026-01-01",
+        )
+        assert "/epistemic_state/E{NNN}.md" in output
+        assert "/epistemic_state/history/E{NNN}.em" not in output
+        assert "/epistemic_state/current/E{NNN}.em" not in output
+
 
 # ==================================================================
 # 8. fold_from lifecycle — set → use → clear
