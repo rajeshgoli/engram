@@ -287,9 +287,11 @@ def cleanup_chunk_context_worktree(project_root: Path, worktree_path: Path | Non
         return
 
     try:
-        resolved = worktree_path.resolve()
+        resolved = Path(worktree_path).resolve()
     except OSError:
-        resolved = worktree_path
+        resolved = None
+    if resolved is None:
+        return
 
     temp_root = Path(tempfile.gettempdir())
     try:
