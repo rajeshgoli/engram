@@ -560,6 +560,7 @@ def migrate_epistemic_history(project_root: str) -> None:
     click.echo(f"  Created current files: {result.created_current_files}")
     click.echo(f"  Created history files: {result.created_history_files}")
     click.echo(f"  Appended blocks: {result.appended_blocks}")
+    click.echo(f"  Migrated legacy files: {result.migrated_legacy_files}")
 
     from engram.linter import lint_from_paths
     lint_result = lint_from_paths(root, config)

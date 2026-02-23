@@ -26,6 +26,7 @@ def test_externalizes_inline_history_into_inferred_file(tmp_path: Path) -> None:
     assert result.created_history_files == 1
     assert result.created_current_files == 1
     assert result.appended_blocks == 1
+    assert result.migrated_legacy_files == 0
 
     updated = epistemic.read_text()
     assert "**History:**" not in updated
@@ -58,6 +59,7 @@ def test_migration_is_noop_when_no_inline_history(tmp_path: Path) -> None:
     assert result.created_history_files == 0
     assert result.created_current_files == 1
     assert result.appended_blocks == 0
+    assert result.migrated_legacy_files == 0
     assert epistemic.read_text() == before
     current_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "current" / "E010.md"
     assert current_file.exists()
@@ -137,7 +139,7 @@ def test_migration_rerun_preserves_existing_current_file(tmp_path: Path) -> None
     assert "user-updated current file" in current_file.read_text()
 
 
-def test_fails_fast_when_legacy_epistemic_files_exist(tmp_path: Path) -> None:
+def test_migrates_legacy_files_into_history_dir(tmp_path: Path) -> None:
     epistemic = tmp_path / "docs" / "decisions" / "epistemic_state.md"
     epistemic.parent.mkdir(parents=True, exist_ok=True)
     epistemic.write_text(
@@ -151,11 +153,30 @@ def test_fails_fast_when_legacy_epistemic_files_exist(tmp_path: Path) -> None:
     legacy_file.parent.mkdir(parents=True, exist_ok=True)
     legacy_file.write_text("legacy path should be blocked\n")
 
+    result = externalize_epistemic_history(epistemic)
+    assert result.migrated_legacy_files == 1
+
+    migrated_path = tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E040.md"
+    assert not legacy_file.exists()
+    assert migrated_path.exists()
+    assert migrated_path.read_text() == "legacy path should be blocked\n"
+
+
+def test_raises_on_legacy_conflict_with_existing_history(tmp_path: Path) -> None:
+    epistemic = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+    epistemic.parent.mkdir(parents=True, exist_ok=True)
+    epistemic.write_text("# Epistemic State\n\n")
+
+    legacy_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E050.md"
+    legacy_file.parent.mkdir(parents=True, exist_ok=True)
+    legacy_file.write_text("legacy-content\n")
+
+    history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E050.md"
+    history_file.parent.mkdir(parents=True, exist_ok=True)
+    history_file.write_text("different-content\n")
+
     with pytest.raises(ValueError) as exc:
         externalize_epistemic_history(epistemic)
-
-    message = str(exc.value)
-    assert "Legacy epistemic files found" in message
-    assert "history/E*.md" in message
-    assert "E040.md" in message
+    assert "Cannot auto-migrate legacy epistemic files due to conflicting targets." in str(exc.value)
     assert legacy_file.exists()
+    assert history_file.read_text() == "different-content\n"

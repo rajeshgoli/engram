@@ -23,6 +23,7 @@ class EpistemicHistoryMigrationResult:
     created_history_files: int
     created_current_files: int
     appended_blocks: int
+    migrated_legacy_files: int
 
 
 def _extract_subject(heading: str) -> str:
@@ -111,28 +112,48 @@ def find_legacy_epistemic_files(epistemic_path: Path) -> list[Path]:
     ]
 
 
-def assert_no_legacy_epistemic_files(epistemic_path: Path) -> None:
-    """Fail fast when legacy per-ID files exist in the old location."""
+def migrate_legacy_epistemic_files(epistemic_path: Path) -> int:
+    """Move legacy per-ID files from ``epistemic_state/E*.md`` into ``history/``.
+
+    Returns the number of legacy files migrated.
+    """
     legacy_files = find_legacy_epistemic_files(epistemic_path)
     if not legacy_files:
-        return
+        return 0
 
     legacy_dir = infer_epistemic_dir(epistemic_path)
-    listed = "\n".join(f"  - {path.name}" for path in legacy_files)
-    raise ValueError(
-        "Legacy epistemic files found under the deprecated path.\n"
-        f"Move files from `{legacy_dir}/E*.md` to "
-        f"`{legacy_dir}/history/E*.md` manually, then rerun migration.\n"
-        f"Detected files:\n{listed}",
-    )
+    migrated = 0
+    for legacy_path in legacy_files:
+        entry_id = legacy_path.stem.upper()
+        target_path = infer_history_path(epistemic_path, entry_id)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if target_path.exists():
+            legacy_text = legacy_path.read_text()
+            target_text = target_path.read_text()
+            if legacy_text.strip() == target_text.strip():
+                legacy_path.unlink(missing_ok=True)
+                migrated += 1
+                continue
+            raise ValueError(
+                "Cannot auto-migrate legacy epistemic files due to conflicting targets.\n"
+                f"Legacy file: {legacy_path}\n"
+                f"Existing target: {target_path}\n"
+                "Resolve conflict manually, then rerun migration.",
+            )
+
+        legacy_path.replace(target_path)
+        migrated += 1
+
+    return migrated
 
 
 def externalize_epistemic_history(epistemic_path: Path) -> EpistemicHistoryMigrationResult:
     """Split inline epistemic content into per-ID current/history inferred files."""
     if not epistemic_path.exists():
-        return EpistemicHistoryMigrationResult(0, 0, 0, 0)
+        return EpistemicHistoryMigrationResult(0, 0, 0, 0, 0)
 
-    assert_no_legacy_epistemic_files(epistemic_path)
+    migrated_legacy_files = migrate_legacy_epistemic_files(epistemic_path)
 
     original = epistemic_path.read_text()
     sections = parse_sections(original)
@@ -194,4 +215,5 @@ def externalize_epistemic_history(epistemic_path: Path) -> EpistemicHistoryMigra
         created_history_files=created_history_files,
         created_current_files=created_current_files,
         appended_blocks=appended_blocks,
+        migrated_legacy_files=migrated_legacy_files,
     )
