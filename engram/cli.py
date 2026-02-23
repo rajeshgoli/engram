@@ -273,6 +273,7 @@ def _enforce_single_active_chunk(project_root: Path) -> None:
     """Prevent generating multiple chunks before processing the active one."""
     import re
     import subprocess
+    from datetime import datetime, timezone
 
     import yaml
 
@@ -288,6 +289,16 @@ def _enforce_single_active_chunk(project_root: Path) -> None:
     chunk_id = lock.get("chunk_id")
     if not isinstance(chunk_id, int):
         return
+    created_at = lock.get("created_at")
+    created_at_str = created_at if isinstance(created_at, str) else None
+    created_epoch: float | None = None
+    if created_at_str:
+        try:
+            normalized = created_at_str.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(normalized).astimezone(timezone.utc).replace(microsecond=0)
+            created_epoch = dt.timestamp()
+        except ValueError:
+            created_epoch = None
 
     # Auto-clear lock if git history indicates the chunk was processed.
     # This is a best-effort heuristic for CLI-driven workflows.
@@ -305,16 +316,33 @@ def _enforce_single_active_chunk(project_root: Path) -> None:
 
     if inside:
         try:
+            # Gate auto-clear to commits created AFTER the lock was created.
+            # This avoids false positives when chunk IDs are reused (e.g. fresh .engram/)
+            # and the repo history contains older "Knowledge fold: chunk <id>" subjects.
             log = subprocess.run(
-                ["git", "log", "-n", "200", "--format=%s"],
+                ["git", "log", "-n", "200", "--format=%ct\t%s"],
                 cwd=str(project_root),
                 capture_output=True,
                 text=True,
                 check=False,
             )
-            subjects = log.stdout or ""
+            raw = log.stdout or ""
         except OSError:
-            subjects = ""
+            raw = ""
+
+        subjects = ""
+        if created_epoch is not None and raw:
+            # Only consider commits strictly AFTER lock creation time.
+            # (Second-level git timestamps can equal the lock second; use strict >.)
+            for line in raw.splitlines():
+                try:
+                    ts_str, subj = line.split("\t", 1)
+                    if int(ts_str) > int(created_epoch):
+                        subjects += subj + "\n"
+                except ValueError:
+                    continue
+        else:
+            subjects = "\n".join([line.split("\t", 1)[-1] for line in raw.splitlines()]) + ("\n" if raw else "")
 
         if re.search(rf"Knowledge fold: chunk(?:_| )0*{chunk_id}\b", subjects):
             lock_path.unlink()
@@ -342,7 +370,7 @@ def _write_active_chunk_lock(project_root: Path, result: object) -> None:
         "chunk_type": getattr(result, "chunk_type", None),
         "input_path": str(getattr(result, "input_path", "")),
         "prompt_path": str(getattr(result, "prompt_path", "")),
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     lock_path.write_text(yaml.safe_dump(payload, sort_keys=True))
 

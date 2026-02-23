@@ -167,3 +167,48 @@ class TestActiveChunkLock:
 
         r3 = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
         assert r3.exit_code == 0
+
+    def test_auto_clear_does_not_unlock_on_older_matching_commit(self, runner: CliRunner, project_dir: Path) -> None:
+        import subprocess
+
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        # Make project_dir a git repo with an OLD commit that matches the chunk subject pattern.
+        subprocess.run(["git", "init"], cwd=str(project_dir), check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(project_dir), check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(project_dir), check=True)
+        (project_dir / "README.md").write_text("x\n")
+        subprocess.run(["git", "add", "README.md"], cwd=str(project_dir), check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Knowledge fold: chunk 1 (old)"],
+            cwd=str(project_dir),
+            check=True,
+            capture_output=True,
+        )
+
+        # Create docs referenced by the queue
+        a = project_dir / "docs" / "working" / "a.md"
+        b = project_dir / "docs" / "working" / "b.md"
+        a.parent.mkdir(parents=True, exist_ok=True)
+        a.write_text("# A\n")
+        b.write_text("# B\n")
+
+        queue_file = project_dir / ".engram" / "queue.jsonl"
+        entries = [
+            {"date": "2026-01-01T00:00:00", "type": "doc", "path": "docs/working/a.md", "chars": 150000, "pass": "initial"},
+            {"date": "2026-01-02T00:00:00", "type": "doc", "path": "docs/working/b.md", "chars": 150000, "pass": "initial"},
+        ]
+        queue_file.write_text("".join(json.dumps(e) + "\n" for e in entries))
+
+        # First generation writes the active lock (chunk_id=1).
+        r1 = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
+        assert r1.exit_code == 0
+        lock_path = project_dir / ".engram" / "active_chunk.yaml"
+        assert lock_path.exists()
+
+        # Second generation should NOT auto-clear (the matching commit is older than the lock).
+        r2 = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
+        assert r2.exit_code != 0
+        assert "Active chunk lock present" in r2.output
+        assert lock_path.exists()
