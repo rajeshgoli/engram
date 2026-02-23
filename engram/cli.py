@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 
 import click
@@ -210,37 +211,233 @@ def next_chunk_cmd(project_root: str) -> None:
     root = Path(project_root)
     config = load_config(root)
 
-    db = ServerDB(root / ".engram" / "engram.db")
-    fold_from = db.get_fold_from()
+    with _acquire_chunk_generation_lock(root):
+        _enforce_single_active_chunk(root)
+
+        db = ServerDB(root / ".engram" / "engram.db")
+        fold_from = db.get_fold_from()
+
+        try:
+            result = next_chunk(config, root, fold_from=fold_from)
+        except FileNotFoundError as exc:
+            click.echo(str(exc))
+            raise SystemExit(1)
+        except ValueError as exc:
+            click.echo(str(exc))
+            raise SystemExit(0)
+
+        click.echo(f"Chunk {result.chunk_id}:")
+        click.echo(f"  Type: {result.chunk_type}")
+        click.echo(f"  Living docs: {result.living_docs_chars:,} chars")
+        click.echo(f"  Budget: {result.budget:,} chars")
+
+        if result.chunk_type == "fold":
+            click.echo(f"  Items: {result.items_count}")
+            click.echo(f"  Chunk chars: {result.chunk_chars:,}")
+            click.echo(f"  Date range: {result.date_range}")
+            if result.pre_assigned_ids:
+                for cat, ids in result.pre_assigned_ids.items():
+                    click.echo(f"  Pre-assigned {cat}: {ids}")
+        else:
+            click.echo(f"  Drift entries: {result.drift_entry_count}")
+            click.echo("  ** Drift triage round — no queue items consumed **")
+
+        click.echo(f"  Written: {result.input_path}")
+        click.echo(f"  Prompt: {result.prompt_path}")
+        click.echo(f"  Remaining in queue: {result.remaining_queue}")
+
+        _write_active_chunk_lock(root, result)
+
+
+@cli.command("clear-active-chunk")
+@click.option(
+    "--project-root",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    default=".",
+    help="Project root directory (default: cwd).",
+)
+def clear_active_chunk_cmd(project_root: str) -> None:
+    """Clear the active chunk lock (recovery for aborted/failed chunk processing)."""
+    root = Path(project_root)
+    lock_path = _active_chunk_lock_path(root)
+    generation_lock = _active_chunk_generation_lock_path(root)
+    cleared: list[str] = []
+    if lock_path.exists():
+        lock_path.unlink()
+        cleared.append(str(lock_path))
+    if generation_lock.exists():
+        generation_lock.unlink()
+        cleared.append(str(generation_lock))
+    if cleared:
+        click.echo("Cleared locks:")
+        for path in cleared:
+            click.echo(f"  {path}")
+    else:
+        click.echo("No active chunk locks present.")
+
+
+def _active_chunk_lock_path(project_root: Path) -> Path:
+    return project_root / ".engram" / "active_chunk.yaml"
+
+
+def _active_chunk_generation_lock_path(project_root: Path) -> Path:
+    return project_root / ".engram" / "active_chunk.lock"
+
+
+@contextmanager
+def _acquire_chunk_generation_lock(project_root: Path):
+    """Acquire per-project generation mutex to prevent concurrent next-chunk races."""
+    import os
+
+    lock_path = _active_chunk_generation_lock_path(project_root)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    try:
+        fd = os.open(lock_path, flags)
+    except FileExistsError as exc:
+        raise click.ClickException(
+            "Chunk generation lock present. Another 'engram next-chunk' may be running "
+            "or a stale lock exists.\n"
+            f"To recover, run:\n  engram clear-active-chunk --project-root {project_root}\n",
+        ) from exc
 
     try:
-        result = next_chunk(config, root, fold_from=fold_from)
-    except FileNotFoundError as exc:
-        click.echo(str(exc))
-        raise SystemExit(1)
-    except ValueError as exc:
-        click.echo(str(exc))
-        raise SystemExit(0)
+        with os.fdopen(fd, "w") as fh:
+            fh.write("engram next-chunk in progress\n")
+        yield
+    finally:
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
 
-    click.echo(f"Chunk {result.chunk_id}:")
-    click.echo(f"  Type: {result.chunk_type}")
-    click.echo(f"  Living docs: {result.living_docs_chars:,} chars")
-    click.echo(f"  Budget: {result.budget:,} chars")
 
-    if result.chunk_type == "fold":
-        click.echo(f"  Items: {result.items_count}")
-        click.echo(f"  Chunk chars: {result.chunk_chars:,}")
-        click.echo(f"  Date range: {result.date_range}")
-        if result.pre_assigned_ids:
-            for cat, ids in result.pre_assigned_ids.items():
-                click.echo(f"  Pre-assigned {cat}: {ids}")
+def _enforce_single_active_chunk(project_root: Path) -> None:
+    """Prevent generating multiple chunks before processing the active one."""
+    import re
+    import subprocess
+    from datetime import datetime, timezone
+
+    import yaml
+
+    lock_path = _active_chunk_lock_path(project_root)
+    if not lock_path.exists():
+        return
+
+    try:
+        lock = yaml.safe_load(lock_path.read_text())
+    except OSError:
+        raise click.ClickException(
+            "Active chunk lock exists but could not be read.\n"
+            f"To recover, run:\n  engram clear-active-chunk --project-root {project_root}\n",
+        ) from None
+    except yaml.YAMLError:
+        raise click.ClickException(
+            "Active chunk lock metadata is invalid YAML.\n"
+            f"To recover, run:\n  engram clear-active-chunk --project-root {project_root}\n",
+        ) from None
+
+    if not isinstance(lock, dict):
+        raise click.ClickException(
+            "Active chunk lock metadata is invalid.\n"
+            f"To recover, run:\n  engram clear-active-chunk --project-root {project_root}\n",
+        )
+    chunk_id = lock.get("chunk_id")
+    if not isinstance(chunk_id, int):
+        raise click.ClickException(
+            "Active chunk lock metadata is invalid (missing or non-integer chunk_id).\n"
+            f"To recover, run:\n  engram clear-active-chunk --project-root {project_root}\n",
+        )
+    created_at = lock.get("created_at")
+    created_at_str = created_at if isinstance(created_at, str) else None
+    created_epoch: float | None = None
+    if created_at_str:
+        try:
+            normalized = created_at_str.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(normalized).astimezone(timezone.utc).replace(microsecond=0)
+            created_epoch = dt.timestamp()
+        except ValueError:
+            raise click.ClickException(
+                "Active chunk lock metadata has invalid created_at timestamp.\n"
+                f"To recover, run:\n  engram clear-active-chunk --project-root {project_root}\n",
+            ) from None
     else:
-        click.echo(f"  Drift entries: {result.drift_entry_count}")
-        click.echo("  ** Drift triage round — no queue items consumed **")
+        raise click.ClickException(
+            "Active chunk lock metadata is missing created_at timestamp.\n"
+            f"To recover, run:\n  engram clear-active-chunk --project-root {project_root}\n",
+        )
 
-    click.echo(f"  Written: {result.input_path}")
-    click.echo(f"  Prompt: {result.prompt_path}")
-    click.echo(f"  Remaining in queue: {result.remaining_queue}")
+    # Auto-clear lock if git history indicates the chunk was processed.
+    # This is a best-effort heuristic for CLI-driven workflows.
+    try:
+        ok = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        inside = ok.returncode == 0 and ok.stdout.strip() == "true"
+    except OSError:
+        inside = False
+
+    if inside:
+        try:
+            # Gate auto-clear to commits created AFTER the lock was created.
+            # This avoids false positives when chunk IDs are reused (e.g. fresh .engram/)
+            # and the repo history contains older "Knowledge fold: chunk <id>" subjects.
+            log = subprocess.run(
+                ["git", "log", "-n", "200", "--format=%ct\t%s"],
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            raw = log.stdout or ""
+        except OSError:
+            raw = ""
+
+        subjects = ""
+        # Only consider commits at/after lock creation time.
+        # Git commit timestamps are second-granularity; equality is common in
+        # fast automated flows where lock creation and commit happen quickly.
+        for line in raw.splitlines():
+            try:
+                ts_str, subj = line.split("\t", 1)
+                if int(ts_str) >= int(created_epoch):
+                    subjects += subj + "\n"
+            except ValueError:
+                continue
+
+        if re.search(rf"Knowledge fold: chunk(?:_| )0*{chunk_id}\b", subjects):
+            lock_path.unlink()
+            return
+
+    input_path = lock.get("input_path", "<unknown>")
+    raise click.ClickException(
+        "Active chunk lock present. Process the existing chunk before generating a new one:\n"
+        f"  chunk_id: {chunk_id}\n"
+        f"  input: {input_path}\n"
+        "To override (abandon and regenerate), run:\n"
+        f"  engram clear-active-chunk --project-root {project_root}\n"
+    )
+
+
+def _write_active_chunk_lock(project_root: Path, result: object) -> None:
+    from datetime import datetime, timezone
+
+    import yaml
+
+    lock_path = _active_chunk_lock_path(project_root)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "chunk_id": getattr(result, "chunk_id", None),
+        "chunk_type": getattr(result, "chunk_type", None),
+        "input_path": str(getattr(result, "input_path", "")),
+        "prompt_path": str(getattr(result, "prompt_path", "")),
+        "created_at": datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    lock_path.write_text(yaml.safe_dump(payload, sort_keys=True))
 
 
 @cli.command()

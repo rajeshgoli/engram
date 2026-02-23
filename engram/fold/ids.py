@@ -162,6 +162,8 @@ class IDAllocator:
         new_concepts: int = 0,
         new_epistemic: int = 0,
         new_workflows: int = 0,
+        *,
+        min_next_ids: dict[str, int] | None = None,
     ) -> dict[str, list[str]]:
         """Atomically reserve ID ranges across all categories for a chunk.
 
@@ -188,6 +190,8 @@ class IDAllocator:
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
+            if min_next_ids:
+                _bump_minimums_on_conn(conn, min_next_ids)
             ranges: dict[str, tuple[str, int, int]] = {}  # cat -> (prefix, start, count)
             for cat, count in requests:
                 if count > 0:
@@ -244,6 +248,40 @@ def _reserve_on_conn(conn: sqlite3.Connection, category: str, count: int) -> int
         (start + count, category),
     )
     return start
+
+
+def _bump_minimums_on_conn(conn: sqlite3.Connection, min_next_ids: dict[str, int]) -> None:
+    """Ensure each category counter is at least the requested minimum.
+
+    Parameters
+    ----------
+    conn:
+        SQLite connection with an active write transaction.
+    min_next_ids:
+        Dict mapping category ("C"|"E"|"W") to minimum next_id integer (>= 1).
+    """
+    for cat, min_next in min_next_ids.items():
+        if cat not in CATEGORIES:
+            raise IDAllocatorError(
+                f"Invalid category '{cat}'. Must be one of: {sorted(CATEGORIES)}"
+            )
+        if min_next < 1:
+            raise IDAllocatorError(f"min_next_id must be >= 1, got {min_next}")
+
+        row = conn.execute(
+            "SELECT next_id FROM id_counters WHERE category = ?",
+            (cat,),
+        ).fetchone()
+        current = row[0] if row else 1
+        if current < min_next:
+            conn.execute(
+                "INSERT OR IGNORE INTO id_counters (category, next_id) VALUES (?, ?)",
+                (cat, min_next),
+            )
+            conn.execute(
+                "UPDATE id_counters SET next_id = ? WHERE category = ?",
+                (min_next, cat),
+            )
 
 
 def estimate_new_entities(items: Sequence[dict]) -> dict[str, int]:

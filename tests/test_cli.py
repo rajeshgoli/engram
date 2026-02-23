@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -127,3 +129,183 @@ class TestMigrateEpistemicHistory:
         assert "**History:**" not in updated
         history_file = project_dir / "docs" / "decisions" / "epistemic_state" / "E005.md"
         assert history_file.exists()
+
+
+class TestActiveChunkLock:
+    def test_next_chunk_blocks_when_active_lock_present(self, runner: CliRunner, project_dir: Path) -> None:
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        # Create docs referenced by the queue
+        a = project_dir / "docs" / "working" / "a.md"
+        b = project_dir / "docs" / "working" / "b.md"
+        a.parent.mkdir(parents=True, exist_ok=True)
+        a.write_text("# A\n")
+        b.write_text("# B\n")
+
+        queue_file = project_dir / ".engram" / "queue.jsonl"
+        entries = [
+            {"date": "2026-01-01T00:00:00", "type": "doc", "path": "docs/working/a.md", "chars": 150000, "pass": "initial"},
+            {"date": "2026-01-02T00:00:00", "type": "doc", "path": "docs/working/b.md", "chars": 150000, "pass": "initial"},
+        ]
+        queue_file.write_text("".join(json.dumps(e) + "\n" for e in entries))
+
+        # First generation should succeed and write lock
+        r1 = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
+        assert r1.exit_code == 0
+        lock_path = project_dir / ".engram" / "active_chunk.yaml"
+        assert lock_path.exists()
+
+        # Second generation should fail fast due to active lock
+        r2 = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
+        assert r2.exit_code != 0
+        assert "Active chunk lock present" in r2.output
+
+        # Clearing the lock should allow generating the next chunk
+        rc = runner.invoke(cli, ["clear-active-chunk", "--project-root", str(project_dir)])
+        assert rc.exit_code == 0
+        assert not lock_path.exists()
+
+        r3 = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
+        assert r3.exit_code == 0
+
+    def test_auto_clear_does_not_unlock_on_older_matching_commit(self, runner: CliRunner, project_dir: Path) -> None:
+        import os
+        import subprocess
+
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        # Make project_dir a git repo with an OLD commit that matches the chunk subject pattern.
+        subprocess.run(["git", "init"], cwd=str(project_dir), check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(project_dir), check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(project_dir), check=True)
+        (project_dir / "README.md").write_text("x\n")
+        subprocess.run(["git", "add", "README.md"], cwd=str(project_dir), check=True)
+        old_env = {
+            **os.environ,
+            "GIT_AUTHOR_DATE": "2020-01-01T00:00:00Z",
+            "GIT_COMMITTER_DATE": "2020-01-01T00:00:00Z",
+        }
+        subprocess.run(
+            ["git", "commit", "-m", "Knowledge fold: chunk 1 (old)"],
+            cwd=str(project_dir),
+            check=True,
+            capture_output=True,
+            env=old_env,
+        )
+
+        # Create docs referenced by the queue
+        a = project_dir / "docs" / "working" / "a.md"
+        b = project_dir / "docs" / "working" / "b.md"
+        a.parent.mkdir(parents=True, exist_ok=True)
+        a.write_text("# A\n")
+        b.write_text("# B\n")
+
+        queue_file = project_dir / ".engram" / "queue.jsonl"
+        entries = [
+            {"date": "2026-01-01T00:00:00", "type": "doc", "path": "docs/working/a.md", "chars": 150000, "pass": "initial"},
+            {"date": "2026-01-02T00:00:00", "type": "doc", "path": "docs/working/b.md", "chars": 150000, "pass": "initial"},
+        ]
+        queue_file.write_text("".join(json.dumps(e) + "\n" for e in entries))
+
+        # First generation writes the active lock (chunk_id=1).
+        r1 = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
+        assert r1.exit_code == 0
+        lock_path = project_dir / ".engram" / "active_chunk.yaml"
+        assert lock_path.exists()
+
+        # Second generation should NOT auto-clear (the matching commit is older than the lock).
+        r2 = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
+        assert r2.exit_code != 0
+        assert "Active chunk lock present" in r2.output
+        assert lock_path.exists()
+
+    def test_invalid_active_chunk_metadata_blocks_generation(self, runner: CliRunner, project_dir: Path) -> None:
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        lock_path = project_dir / ".engram" / "active_chunk.yaml"
+        lock_path.write_text("chunk_id: not-an-int\ncreated_at: 2026-01-01T00:00:00Z\n")
+
+        result = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
+        assert result.exit_code != 0
+        assert "Active chunk lock metadata is invalid" in result.output
+
+        generation_lock = project_dir / ".engram" / "active_chunk.lock"
+        assert not generation_lock.exists()
+
+    def test_generation_lock_is_held_during_next_chunk(self, runner: CliRunner, project_dir: Path, monkeypatch) -> None:
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        observed = {"lock_seen": False}
+
+        def fake_next_chunk(config, root, fold_from=None):  # noqa: ANN001
+            observed["lock_seen"] = (root / ".engram" / "active_chunk.lock").exists()
+            chunks_dir = root / ".engram" / "chunks"
+            chunks_dir.mkdir(parents=True, exist_ok=True)
+            return SimpleNamespace(
+                chunk_id=1,
+                chunk_type="fold",
+                living_docs_chars=0,
+                budget=1000,
+                items_count=0,
+                chunk_chars=0,
+                date_range="2026-01-01 to 2026-01-01",
+                pre_assigned_ids={},
+                input_path=chunks_dir / "chunk_001_input.md",
+                prompt_path=chunks_dir / "chunk_001_prompt.txt",
+                remaining_queue=0,
+                drift_entry_count=0,
+            )
+
+        import engram.fold.chunker as chunker_module
+
+        monkeypatch.setattr(chunker_module, "next_chunk", fake_next_chunk)
+        result = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
+        assert result.exit_code == 0
+        assert observed["lock_seen"] is True
+        assert not (project_dir / ".engram" / "active_chunk.lock").exists()
+
+    def test_auto_clear_includes_same_second_commit_timestamp(self, project_dir: Path, monkeypatch) -> None:
+        from datetime import datetime, timezone
+        import subprocess
+        from engram import cli as cli_module
+
+        (project_dir / ".engram").mkdir(parents=True, exist_ok=True)
+        lock_path = project_dir / ".engram" / "active_chunk.yaml"
+        created_at = "2026-01-01T00:00:05Z"
+        created_epoch = int(
+            datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            .astimezone(timezone.utc)
+            .timestamp(),
+        )
+        lock_path.write_text(
+            yaml.safe_dump(
+                {
+                    "chunk_id": 12,
+                    "created_at": created_at,
+                    "input_path": "dummy.md",
+                },
+                sort_keys=True,
+            ),
+        )
+
+        class DummyProc:
+            def __init__(self, returncode: int = 0, stdout: str = "") -> None:
+                self.returncode = returncode
+                self.stdout = stdout
+
+        def fake_run(args, cwd=None, capture_output=False, text=False, check=False):  # noqa: ANN001
+            if args[:3] == ["git", "rev-parse", "--is-inside-work-tree"]:
+                return DummyProc(returncode=0, stdout="true\n")
+            if args[:4] == ["git", "log", "-n", "200"]:
+                # Same second as created_at; should be included and clear the lock.
+                return DummyProc(returncode=0, stdout=f"{created_epoch}\tKnowledge fold: chunk 12\n")
+            raise AssertionError(f"Unexpected subprocess args: {args}")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        cli_module._enforce_single_active_chunk(project_dir)
+        assert not lock_path.exists()

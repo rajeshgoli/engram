@@ -997,12 +997,14 @@ def next_chunk(
     min_preassign_concepts = int(thresholds.get("min_preassign_concepts", 0) or 0)
     min_preassign_epistemic = int(thresholds.get("min_preassign_epistemic", 0) or 0)
     min_preassign_workflows = int(thresholds.get("min_preassign_workflows", 0) or 0)
+    min_next_ids = _compute_min_next_ids_from_living_docs(doc_paths)
     db_path = engram_dir / "engram.db"
     with IDAllocator(db_path) as allocator:
         pre_assigned = allocator.pre_assign_for_chunk(
             new_concepts=max(estimates["C"], min_preassign_concepts),
             new_epistemic=max(estimates["E"], min_preassign_epistemic),
             new_workflows=max(estimates["W"], min_preassign_workflows),
+            min_next_ids=min_next_ids,
         )
 
     date_range = f"{chunk_items[0]['date'][:10]} to {chunk_items[-1]['date'][:10]}"
@@ -1061,3 +1063,47 @@ def next_chunk(
         date_range=date_range,
         pre_assigned_ids=pre_assigned,
     )
+
+
+def _compute_min_next_ids_from_living_docs(doc_paths: dict[str, Path]) -> dict[str, int]:
+    """Compute minimum next-id counters based on stable IDs already in living docs.
+
+    Engram's allocator DB (``.engram/engram.db``) may be newly created or out of
+    sync with the project docs. If the allocator is behind, it can pre-assign
+    IDs that already exist (e.g., pre-assigning C107 when C107 is already in
+    the concept registry). This function derives ``{category: max_seen + 1}``
+    so the allocator can bump counters forward before reserving ranges.
+    """
+    registry_docs = {
+        "concepts": "C",
+        "epistemic": "E",
+        "workflows": "W",
+    }
+
+    min_next: dict[str, int] = {}
+    for key, prefix in registry_docs.items():
+        path = doc_paths.get(key)
+        if not path or not path.exists():
+            continue
+
+        try:
+            content = path.read_text()
+        except OSError:
+            continue
+
+        max_seen = 0
+        for section in parse_sections(content):
+            entry_id = extract_id(section["heading"])
+            if not entry_id or not entry_id.startswith(prefix):
+                continue
+            try:
+                num = int(entry_id[1:])
+            except ValueError:
+                continue
+            if num > max_seen:
+                max_seen = num
+
+        if max_seen > 0:
+            min_next[prefix] = max_seen + 1
+
+    return min_next
