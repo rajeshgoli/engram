@@ -214,6 +214,7 @@ def render_agent_prompt(
         f"- Do NOT use the Task tool or spawn sub-agents. Do all work directly.\n"
         f"- Do NOT use Write to overwrite entire files. Use Edit for surgical updates only.\n"
         f"- Be SUCCINCT. High information density, no filler, no narrative prose.\n"
+        f"- Exception: per-ID epistemic current files ({epistemic_current_dir}/E*.md) should be detailed and coherent, not terse.\n"
         f"{repo_scope_constraints}"
         f"{epistemic_constraints}"
         f"\n"

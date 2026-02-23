@@ -98,7 +98,7 @@ Graveyard files are append-only. Never edit existing graveyard entries.
 - **Be succinct.** High information density. No filler.
 - Timeline: short factual entries. What happened, why, what resulted.
 - Concept registry: structured fields only. 5 lines ideal, 10 max.
-- Epistemic state: 1-2 sentence position. 1-sentence agent guidance.
+- Epistemic state (`epistemic_state.md`): 1-2 sentence position. 1-sentence agent guidance.
 - Workflow registry: structured fields only. Context + trigger/method.
 - DEAD/refuted entries: 1-2 sentences max. Key lesson + replacement.
 - **Budget matters.** Every line stays in context for future chunks. Be ruthless about cutting words.
@@ -106,6 +106,7 @@ Graveyard files are append-only. Never edit existing graveyard entries.
   - Mutable current state (rewrite when E{NNN} changes): `{{ epistemic_current_dir }}/E{NNN}.md`
   - Append-only history log (append only): `{{ epistemic_history_dir }}/E{NNN}.md`
 - Keep `{{ doc_paths.epistemic }}` concise. Put detailed, coherent per-claim state in the current file.
+- Per-ID current files (`{{ epistemic_current_dir }}/E{NNN}.md`) should be detailed and coherent (full claim state, rationale, caveats, and actionable guidance). Do NOT force brevity there.
 
 ## Epistemic Per-ID File Requirement (Required)
 
@@ -113,6 +114,7 @@ If you create any new epistemic entry `E{NNN}` in this chunk:
 1. Create/update `{{ epistemic_current_dir }}/E{NNN}.md` with the matching `## E{NNN}: ...` heading.
 2. Create/update `{{ epistemic_history_dir }}/E{NNN}.md` with the matching heading and at least one support bullet (prefer `Evidence@<commit> ...`).
 3. Keep support content in either inline `Evidence:`/`History:` or inferred per-ID files (lint enforces this).
+4. Write the current-state file as a detailed state description, not a terse stub.
 
 {% set preassigned_e = pre_assigned_ids.get("E", []) %}
 {% if preassigned_e %}
