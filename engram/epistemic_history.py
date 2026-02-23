@@ -1,8 +1,11 @@
-"""Helpers for externalized epistemic history files.
+"""Helpers for externalized per-ID epistemic files.
 
-External history path is inferred from the epistemic state doc path and entry ID:
-`<epistemic_state_stem>/<EID>.md`.
-Example: docs/decisions/epistemic_state.md -> docs/decisions/epistemic_state/E005.md
+Preferred split layout:
+- Mutable current state: ``<epistemic_state_stem>/current/<EID>.em``
+- Append-only history: ``<epistemic_state_stem>/history/<EID>.em``
+
+Legacy compatibility:
+- Prior layouts used ``<epistemic_state_stem>/<EID>.md`` as a single file.
 """
 
 from __future__ import annotations
@@ -70,13 +73,47 @@ def _is_history_boundary(
 
 
 def infer_history_dir(epistemic_doc_path: Path) -> Path:
-    """Return inferred history directory for an epistemic state doc."""
-    return epistemic_doc_path.with_suffix("")
+    """Return inferred append-only history directory for an epistemic doc."""
+    return infer_epistemic_dir(epistemic_doc_path) / "history"
 
 
 def infer_history_path(epistemic_doc_path: Path, entry_id: str) -> Path:
-    """Return inferred history file path for an epistemic entry ID."""
-    return infer_history_dir(epistemic_doc_path) / f"{entry_id}.md"
+    """Return inferred append-only history file path for an epistemic entry."""
+    return infer_history_dir(epistemic_doc_path) / f"{entry_id}.em"
+
+
+def infer_epistemic_dir(epistemic_doc_path: Path) -> Path:
+    """Return inferred base directory for per-ID epistemic files."""
+    return epistemic_doc_path.with_suffix("")
+
+
+def infer_current_dir(epistemic_doc_path: Path) -> Path:
+    """Return inferred mutable current-state directory for an epistemic doc."""
+    return infer_epistemic_dir(epistemic_doc_path) / "current"
+
+
+def infer_current_path(epistemic_doc_path: Path, entry_id: str) -> Path:
+    """Return inferred mutable current-state file path for an epistemic entry."""
+    return infer_current_dir(epistemic_doc_path) / f"{entry_id}.em"
+
+
+def infer_legacy_history_path(epistemic_doc_path: Path, entry_id: str) -> Path:
+    """Return legacy single-file path used before split current/history layout."""
+    return infer_epistemic_dir(epistemic_doc_path) / f"{entry_id}.md"
+
+
+def infer_history_candidates(epistemic_doc_path: Path, entry_id: str) -> list[Path]:
+    """Return history file path candidates in preference order.
+
+    Returns:
+    1) New split history path (history/E###.em)
+    2) Legacy single-file path (E###.md)
+    """
+    primary = infer_history_path(epistemic_doc_path, entry_id)
+    legacy = infer_legacy_history_path(epistemic_doc_path, entry_id)
+    if primary == legacy:
+        return [primary]
+    return [primary, legacy]
 
 
 def extract_external_history_for_entry(history_text: str, entry_id: str) -> str | None:

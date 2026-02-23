@@ -383,7 +383,9 @@ class TestFindClaimsByStatus:
             "## E021: contested external history (contested)\n"
             "**Current position:** disputed.\n"
         )
-        history_file = project / "docs" / "decisions" / "epistemic_state" / "E021.md"
+        history_file = (
+            project / "docs" / "decisions" / "epistemic_state" / "history" / "E021.em"
+        )
         history_file.parent.mkdir(parents=True, exist_ok=True)
         history_file.write_text(
             "# Epistemic History\n\n"
@@ -464,9 +466,9 @@ class TestFindStaleEpistemicEntries:
             f"- {old_date}: initial claim\n"
         )
 
-        history_dir = project / "docs" / "decisions" / "epistemic_state"
+        history_dir = project / "docs" / "decisions" / "epistemic_state" / "history"
         history_dir.mkdir(parents=True, exist_ok=True)
-        (history_dir / "E087.md").write_text(
+        (history_dir / "E087.em").write_text(
             "## E087: inner structure pruning impact\n"
             f"- Evidence@{sha} docs/decisions/epistemic_state.md:1: audit update -> believed\n"
         )
@@ -489,9 +491,9 @@ class TestFindStaleEpistemicEntries:
             f"- {old_date}: initial claim\n"
         )
 
-        history_dir = project / "docs" / "decisions" / "epistemic_state"
+        history_dir = project / "docs" / "decisions" / "epistemic_state" / "history"
         history_dir.mkdir(parents=True, exist_ok=True)
-        (history_dir / "E088.md").write_text(
+        (history_dir / "E088.em").write_text(
             "## E088: some claim\n"
             "- Evidence@deadbeef docs/decisions/epistemic_state.md:1: unknown -> believed\n"
         )
@@ -750,7 +752,9 @@ class TestFindStaleEpistemicEntries:
             "## E022: external history only (believed)\n"
             "**Current position:** still believed.\n"
         )
-        history_file = project / "docs" / "decisions" / "epistemic_state" / "E022.md"
+        history_file = (
+            project / "docs" / "decisions" / "epistemic_state" / "history" / "E022.em"
+        )
         history_file.parent.mkdir(parents=True, exist_ok=True)
         history_file.write_text(
             "# Epistemic History\n\n"
@@ -771,12 +775,36 @@ class TestFindStaleEpistemicEntries:
             "**History:**\n"
             f"- {old_date}: old inline\n"
         )
-        history_file = project / "docs" / "decisions" / "epistemic_state" / "E023.md"
+        history_file = (
+            project / "docs" / "decisions" / "epistemic_state" / "history" / "E023.em"
+        )
         history_file.parent.mkdir(parents=True, exist_ok=True)
         history_file.write_text(
             "# Epistemic History\n\n"
             "## E023: mixed history freshness\n\n"
             f"- {recent_date}: latest external\n",
+        )
+        results = _find_stale_epistemic_entries(epistemic, days_threshold=90)
+        assert results == []
+
+    def test_current_file_newer_than_inline_suppresses_stale(self, project):
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+        recent_date = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%d")
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E089: split current freshness (believed)\n"
+            "**History:**\n"
+            f"- {old_date}: stale inline\n",
+        )
+        current_file = (
+            project / "docs" / "decisions" / "epistemic_state" / "current" / "E089.em"
+        )
+        current_file.parent.mkdir(parents=True, exist_ok=True)
+        current_file.write_text(
+            "## E089: split current freshness (believed)\n"
+            f"**Current position:** Validated again on {recent_date}.\n"
+            "**Agent guidance:** keep monitoring.\n",
         )
         results = _find_stale_epistemic_entries(epistemic, days_threshold=90)
         assert results == []
@@ -790,7 +818,9 @@ class TestFindStaleEpistemicEntries:
             "## E024: scoped external history (believed)\n"
             "**Current position:** still believed.\n"
         )
-        history_file = project / "docs" / "decisions" / "epistemic_state" / "E024.md"
+        history_file = (
+            project / "docs" / "decisions" / "epistemic_state" / "history" / "E024.em"
+        )
         history_file.parent.mkdir(parents=True, exist_ok=True)
         history_file.write_text(
             "# Epistemic History\n\n"
@@ -1043,6 +1073,8 @@ class TestNextChunk:
         prompt_text = result.prompt_path.read_text()
         assert "knowledge fold chunk" in prompt_text
         assert "Pre-assigned IDs for this chunk" in prompt_text
+        assert "/epistemic_state/current/E*.em" in prompt_text
+        assert "/epistemic_state/history/E*.em" in prompt_text
 
     def test_pre_assigned_ids_do_not_collide_with_existing_doc_ids(self, project, config):
         # Seed living docs with high existing IDs (simulates fresh allocator DB behind docs)

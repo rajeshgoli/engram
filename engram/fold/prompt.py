@@ -8,7 +8,7 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader
 
-from engram.epistemic_history import infer_history_dir
+from engram.epistemic_history import infer_current_dir, infer_history_dir
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
@@ -40,6 +40,11 @@ def _epistemic_history_dir_str(doc_paths: dict[str, Path]) -> str:
     return str(infer_history_dir(doc_paths["epistemic"]))
 
 
+def _epistemic_current_dir_str(doc_paths: dict[str, Path]) -> str:
+    """Infer mutable current-state directory for epistemic per-ID files."""
+    return str(infer_current_dir(doc_paths["epistemic"]))
+
+
 def render_chunk_input(
     *,
     chunk_id: int,
@@ -58,6 +63,7 @@ def render_chunk_input(
 
     instructions = template.render(
         doc_paths=_stringify_paths(doc_paths),
+        epistemic_current_dir=_epistemic_current_dir_str(doc_paths),
         epistemic_history_dir=_epistemic_history_dir_str(doc_paths),
         pre_assigned_ids=pre_assigned_ids,
     )
@@ -113,6 +119,7 @@ def render_triage_input(
         entries=entries,
         chunk_id=chunk_id,
         doc_paths=_stringify_paths(doc_paths),
+        epistemic_current_dir=_epistemic_current_dir_str(doc_paths),
         epistemic_history_dir=_epistemic_history_dir_str(doc_paths),
         entry_count=len(entries),
         ref_commit=ref_commit,
@@ -148,6 +155,7 @@ def render_agent_prompt(
         else "engram lint --project-root <project_root>"
     )
     epistemic_history_dir = _epistemic_history_dir_str(doc_paths)
+    epistemic_current_dir = _epistemic_current_dir_str(doc_paths)
 
     return (
         f"You are processing a knowledge fold chunk.\n"
@@ -156,7 +164,8 @@ def render_agent_prompt(
         f"- Do NOT use the Task tool or spawn sub-agents. Do all work directly.\n"
         f"- Do NOT use Write to overwrite entire files. Use Edit for surgical updates only.\n"
         f"- Be SUCCINCT. High information density, no filler, no narrative prose.\n"
-        f"- Do NOT read per-ID epistemic history files under {epistemic_history_dir}/E*.md.\n"
+        f"- Epistemic current-state files live under {epistemic_current_dir}/E*.em and are editable.\n"
+        f"- Do NOT read per-ID epistemic history files under {epistemic_history_dir}/E*.em.\n"
         f"  They are append-only logs; when needed, append via Bash without opening them.\n"
         f"\n"
         f"Read the input file at {input_path.resolve()} — it contains system instructions\n"

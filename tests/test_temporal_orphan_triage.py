@@ -459,6 +459,8 @@ class TestTriagePromptTemporalContext:
         assert "git worktree add /tmp/engram-epistemic-abc123de" in output
         assert "Evidence@<commit>" in output
         assert "Do NOT use generic lines like `reaffirmed -> believed`." in output
+        assert "/epistemic_state/history/E{NNN}.em" in output
+        assert "/epistemic_state/current/E{NNN}.em" in output
 
 
 # ==================================================================
