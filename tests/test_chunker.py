@@ -22,6 +22,7 @@ from engram.fold.chunker import (
     _find_workflow_repetitions,
     _read_queue_entry_text,
     _render_item_content,
+    cleanup_chunk_context_worktree,
     compute_budget,
     next_chunk,
     scan_drift,
@@ -1062,6 +1063,7 @@ class TestNextChunk:
         assert result.input_path.exists()
         assert result.prompt_path.exists()
         assert result.remaining_queue == 0
+        assert result.context_worktree_path is None
 
         # Verify input file content
         input_text = result.input_path.read_text()
@@ -1080,6 +1082,39 @@ class TestNextChunk:
         assert "Do NOT inspect source code/git/filesystem unless the input explicitly requires special triage verification." in prompt_text
         assert "/epistemic_state/current/E*.md" in prompt_text
         assert "/epistemic_state/history/E*.md" in prompt_text
+
+    def test_normal_chunk_creates_context_worktree_in_git_repo(self, project, config):
+        subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=project, check=True)
+        subprocess.run(["git", "add", "."], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=project, check=True, capture_output=True)
+
+        doc_path = project / "docs" / "working" / "spec.md"
+        doc_path.parent.mkdir(parents=True, exist_ok=True)
+        doc_path.write_text("# Test Spec\nContext checkout.\n")
+        _write_queue(project, [_make_doc_item(path="docs/working/spec.md", chars=100)])
+
+        result = next_chunk(config, project)
+        assert result.context_worktree_path is not None
+        assert result.context_commit is not None
+        assert result.context_worktree_path.exists()
+
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        assert result.context_commit == head
+
+        prompt_text = result.prompt_path.read_text()
+        assert str(result.context_worktree_path) in prompt_text
+        assert "Do NOT inspect source files from the project root workspace for this chunk." in prompt_text
+
+        cleanup_chunk_context_worktree(project, result.context_worktree_path)
+        assert not result.context_worktree_path.exists()
 
     def test_prompt_uses_split_epistemic_paths_when_legacy_files_present(self, project, config):
         legacy = project / "docs" / "decisions" / "epistemic_state" / "E005.md"

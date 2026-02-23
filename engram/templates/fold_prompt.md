@@ -112,8 +112,13 @@ Graveyard files are append-only. Never edit existing graveyard entries.
 - Use Edit for surgical updates. Do NOT reproduce entire documents.
 - Only edit sections affected by new content.
 - Capture cross-concept relationships using stable IDs (C###, E###, W###).
+{% if context_worktree_path %}
+- If you inspect repo files, use ONLY `{{ context_worktree_path }}`{% if context_commit %} (commit `{{ context_commit[:12] }}`){% endif %}.
+- Do NOT inspect source files from the project-root workspace for this chunk.
+{% else %}
 - For normal fold chunks, use ONLY this input file + the 4 living docs.
 - Do NOT inspect source code, git history, or filesystem state to verify claims.
+{% endif %}
 - Architect review comments on merged PRs = debt.
 - When two artifacts make contradictory claims, that's an epistemic entry.
 - For each touched E{NNN}, keep exactly one coherent current position (no contradictory parallel states).

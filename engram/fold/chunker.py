@@ -11,6 +11,8 @@ import logging
 import re
 import subprocess
 import hashlib
+import shutil
+import tempfile
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -126,6 +128,8 @@ class ChunkResult:
     date_range: str | None = None
     drift_entry_count: int = 0
     pre_assigned_ids: dict[str, list[str]] = field(default_factory=dict)
+    context_worktree_path: Path | None = None
+    context_commit: str | None = None
 
 
 # ------------------------------------------------------------------
@@ -200,6 +204,116 @@ def _resolve_ref_commit(project_root: Path, fold_from: str) -> str | None:
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
     return None
+
+
+def _resolve_head_commit(project_root: Path) -> str | None:
+    """Resolve current HEAD commit hash for *project_root*."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd=str(project_root),
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
+
+
+def _resolve_chunk_context_commit(
+    project_root: Path,
+    *,
+    date_hint: str | None = None,
+    fallback_commit: str | None = None,
+) -> str | None:
+    """Resolve the commit used for per-chunk context checkout.
+
+    Priority:
+    1) explicit fallback commit (e.g., fold_from-resolved reference)
+    2) date-based commit nearest *date_hint*
+    3) current HEAD commit
+    """
+    if fallback_commit:
+        return fallback_commit
+    if date_hint:
+        commit = _resolve_ref_commit(project_root, date_hint)
+        if commit:
+            return commit
+    return _resolve_head_commit(project_root)
+
+
+def _create_chunk_context_worktree(
+    project_root: Path,
+    *,
+    chunk_id: int,
+    commit: str,
+) -> Path | None:
+    """Create per-chunk temporary context worktree under system temp dir."""
+    temp_dir = Path(tempfile.gettempdir())
+    prefix = f"engram-chunk-{chunk_id:03d}-{commit[:8]}-"
+    worktree_path = Path(tempfile.mkdtemp(prefix=prefix, dir=str(temp_dir)))
+
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "add", "--detach", str(worktree_path), commit],
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        shutil.rmtree(worktree_path, ignore_errors=True)
+        return None
+
+    if result.returncode != 0:
+        log.warning(
+            "Failed to create chunk context worktree at %s: %s",
+            worktree_path,
+            (result.stderr or "").strip() or "unknown error",
+        )
+        shutil.rmtree(worktree_path, ignore_errors=True)
+        return None
+
+    return worktree_path
+
+
+def cleanup_chunk_context_worktree(project_root: Path, worktree_path: Path | None) -> None:
+    """Remove a previously-created per-chunk context worktree."""
+    if worktree_path is None:
+        return
+
+    try:
+        resolved = worktree_path.resolve()
+    except OSError:
+        resolved = worktree_path
+
+    temp_root = Path(tempfile.gettempdir())
+    try:
+        temp_root_resolved = temp_root.resolve()
+    except OSError:
+        temp_root_resolved = temp_root
+    try:
+        resolved.relative_to(temp_root_resolved)
+    except ValueError:
+        log.warning("Refusing to remove non-temp context worktree path: %s", worktree_path)
+        return
+
+    try:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(resolved)],
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    shutil.rmtree(resolved, ignore_errors=True)
 
 
 def _file_exists_at_commit(
@@ -958,6 +1072,21 @@ def next_chunk(
     ref_commit = drift.ref_commit
 
     if drift_type:
+        context_commit = _resolve_chunk_context_commit(
+            project_root,
+            date_hint=fold_from,
+            fallback_commit=ref_commit,
+        )
+        context_worktree_path = (
+            _create_chunk_context_worktree(
+                project_root,
+                chunk_id=chunk_id,
+                commit=context_commit,
+            )
+            if context_commit
+            else None
+        )
+
         # Drift triage chunk — queue is NOT consumed
         with open(queue_file, "w") as fh:
             for entry in queue:
@@ -971,6 +1100,8 @@ def next_chunk(
             ref_commit=ref_commit,
             ref_date=fold_from,
             project_root=project_root,
+            context_worktree_path=context_worktree_path,
+            context_commit=context_commit,
         )
 
         input_path = chunks_dir / f"chunk_{chunk_id:03d}_input.md"
@@ -982,6 +1113,8 @@ def next_chunk(
             input_path=input_path,
             doc_paths=doc_paths,
             project_root=project_root,
+            context_worktree_path=context_worktree_path,
+            context_commit=context_commit,
         )
         prompt_path = chunks_dir / f"chunk_{chunk_id:03d}_prompt.txt"
         prompt_path.write_text(prompt_content)
@@ -1023,6 +1156,8 @@ def next_chunk(
             living_docs_chars=living_docs_chars,
             remaining_queue=len(queue),
             drift_entry_count=drift_counts.get(drift_type, 0),
+            context_worktree_path=context_worktree_path,
+            context_commit=context_commit,
         )
 
     # Normal chunk — fill from queue up to budget
@@ -1056,6 +1191,20 @@ def next_chunk(
         )
 
     date_range = f"{chunk_items[0]['date'][:10]} to {chunk_items[-1]['date'][:10]}"
+    chunk_end_date = chunk_items[-1]["date"][:10]
+    context_commit = _resolve_chunk_context_commit(
+        project_root,
+        date_hint=chunk_end_date,
+    )
+    context_worktree_path = (
+        _create_chunk_context_worktree(
+            project_root,
+            chunk_id=chunk_id,
+            commit=context_commit,
+        )
+        if context_commit
+        else None
+    )
 
     # Render item contents
     items_content = ""
@@ -1068,6 +1217,8 @@ def next_chunk(
         items_content=items_content,
         pre_assigned_ids=pre_assigned,
         doc_paths=doc_paths,
+        context_worktree_path=context_worktree_path,
+        context_commit=context_commit,
     )
 
     input_path = chunks_dir / f"chunk_{chunk_id:03d}_input.md"
@@ -1079,6 +1230,8 @@ def next_chunk(
         input_path=input_path,
         doc_paths=doc_paths,
         project_root=project_root,
+        context_worktree_path=context_worktree_path,
+        context_commit=context_commit,
     )
     prompt_path = chunks_dir / f"chunk_{chunk_id:03d}_prompt.txt"
     prompt_path.write_text(prompt_content)
@@ -1110,6 +1263,8 @@ def next_chunk(
         remaining_queue=len(queue),
         date_range=date_range,
         pre_assigned_ids=pre_assigned,
+        context_worktree_path=context_worktree_path,
+        context_commit=context_commit,
     )
 
 
