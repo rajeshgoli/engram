@@ -59,8 +59,12 @@ def _write_current_state(path: Path, section_text: str) -> bool:
     """Write canonical mutable current-state file for an epistemic entry.
 
     Returns True when a new current-state file was created.
+    Existing files are preserved to keep migration reruns safe.
     """
-    created = not path.exists()
+    if path.exists():
+        return False
+
+    created = True
     path.parent.mkdir(parents=True, exist_ok=True)
     content = section_text.strip()
     if content:

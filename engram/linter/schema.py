@@ -88,6 +88,18 @@ _TRIGGER_RE = re.compile(r'^\s*-?\s*\*?\*?Trigger(?:\s+for\s+change)?\*?\*?:', r
 _CURRENT_METHOD_RE = re.compile(r'^\s*-?\s*\*?\*?Current method\*?\*?:', re.MULTILINE)
 
 
+def _has_external_support_content(section_text: str) -> bool:
+    """Return True when scoped external section contains non-heading content."""
+    for line in section_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            continue
+        return True
+    return False
+
+
 class Violation:
     """A single schema violation."""
 
@@ -228,6 +240,7 @@ def validate_epistemic_state(content: str, epistemic_path: Path | None = None) -
         history_sources = [body]
         external_support_found = False
         external_file_seen = False
+        external_violation_seen = False
 
         current_path = infer_current_path(epistemic_path, entry_id) if epistemic_path else None
         history_paths = (
@@ -252,6 +265,7 @@ def validate_epistemic_state(content: str, epistemic_path: Path | None = None) -
                     "epistemic", entry_id,
                     f"Could not read inferred epistemic file: {candidate}",
                 ))
+                external_violation_seen = True
                 continue
 
             scoped_external = extract_external_history_for_entry(external_text, entry_id)
@@ -261,33 +275,68 @@ def validate_epistemic_state(content: str, epistemic_path: Path | None = None) -
                     f"Inferred epistemic file does not contain matching heading for {entry_id}: "
                     f"{candidate}",
                 ))
+                external_violation_seen = True
+                continue
+
+            is_current_candidate = bool(current_path and candidate == current_path)
+            if is_current_candidate:
+                has_current_support = bool(
+                    _EVIDENCE_RE.search(scoped_external)
+                    or _HISTORY_RE.search(scoped_external)
+                    or _EVIDENCE_AT_RE.search(scoped_external)
+                )
+                if not has_current_support:
+                    continue
+            elif not _has_external_support_content(scoped_external):
+                violations.append(Violation(
+                    "epistemic", entry_id,
+                    "Inferred epistemic history file has no support content for "
+                    f"{entry_id}: {candidate}",
+                ))
+                external_violation_seen = True
                 continue
 
             history_sources.append(scoped_external)
             external_support_found = True
 
-        if not has_inline and not external_support_found and not external_file_seen:
+        if not has_inline and not external_support_found:
+            if external_violation_seen:
+                continue
+
             preferred_history = history_paths[0] if history_paths else None
-            if preferred_history and current_path:
-                missing_msg = (
-                    "Missing inline 'Evidence:'/'History:' and inferred epistemic files "
-                    f"not found: current={current_path}, history={preferred_history}"
-                )
-            elif preferred_history:
-                missing_msg = (
-                    "Missing inline 'Evidence:'/'History:' and inferred history file "
-                    f"not found: {preferred_history}"
-                )
-            elif current_path:
-                missing_msg = (
-                    "Missing inline 'Evidence:'/'History:' and inferred current-state file "
-                    f"not found: {current_path}"
-                )
+            if not external_file_seen:
+                if preferred_history and current_path:
+                    missing_msg = (
+                        "Missing inline 'Evidence:'/'History:' and inferred epistemic files "
+                        f"not found: current={current_path}, history={preferred_history}"
+                    )
+                elif preferred_history:
+                    missing_msg = (
+                        "Missing inline 'Evidence:'/'History:' and inferred history file "
+                        f"not found: {preferred_history}"
+                    )
+                elif current_path:
+                    missing_msg = (
+                        "Missing inline 'Evidence:'/'History:' and inferred current-state file "
+                        f"not found: {current_path}"
+                    )
+                else:
+                    missing_msg = (
+                        "Non-refuted epistemic entry missing required "
+                        "'Evidence:' or 'History:' field"
+                    )
             else:
-                missing_msg = (
-                    "Non-refuted epistemic entry missing required "
-                    "'Evidence:' or 'History:' field"
-                )
+                if preferred_history and current_path:
+                    missing_msg = (
+                        "Missing inline 'Evidence:'/'History:' and inferred epistemic files "
+                        "lack support content: "
+                        f"current={current_path}, history={preferred_history}"
+                    )
+                else:
+                    missing_msg = (
+                        "Missing inline 'Evidence:'/'History:' and inferred epistemic files "
+                        "lack support content"
+                    )
             violations.append(Violation("epistemic", entry_id, missing_msg))
             continue
 

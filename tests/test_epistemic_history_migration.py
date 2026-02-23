@@ -104,3 +104,32 @@ def test_unknown_bold_field_after_history_is_preserved(tmp_path: Path) -> None:
     content = history_file.read_text()
     assert "2026-02-21: validated from timeline" in content
     assert "Custom note" not in content
+
+
+def test_migration_rerun_preserves_existing_current_file(tmp_path: Path) -> None:
+    epistemic = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+    epistemic.parent.mkdir(parents=True, exist_ok=True)
+    epistemic.write_text(
+        "# Epistemic State\n\n"
+        "## E030: preserve current edits (believed)\n"
+        "**Current position:** from main doc.\n"
+        "**History:**\n"
+        "- 2026-02-21: initial\n"
+        "**Agent guidance:** baseline.\n",
+    )
+
+    first = externalize_epistemic_history(epistemic)
+    assert first.created_current_files == 1
+
+    current_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "current" / "E030.em"
+    current_file.write_text(
+        "## E030: preserve current edits (believed)\n"
+        "**Current position:** user-updated current file.\n"
+        "**History:**\n"
+        "- Evidence@a3e0b731 docs/decisions/timeline.md:10: validated -> believed\n"
+        "**Agent guidance:** keep this edit.\n",
+    )
+
+    second = externalize_epistemic_history(epistemic)
+    assert second.created_current_files == 0
+    assert "user-updated current file" in current_file.read_text()

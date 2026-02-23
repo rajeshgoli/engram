@@ -305,9 +305,30 @@ Just a statement with no evidence chain.
         current_file.write_text(
             "## E004: externalized current claim (believed)\n"
             "**Current position:** still believed\n"
+            "**History:**\n"
+            "- Evidence@a3e0b731 docs/decisions/timeline.md:10: validated -> believed\n"
             "**Agent guidance:** monitor.\n",
         )
         assert validate_epistemic_state(doc, epistemic_path=epistemic_path) == []
+
+    def test_current_file_without_support_content_is_violation(self, tmp_path: Path) -> None:
+        doc = """\
+## E012: externalized current claim (believed)
+**Current position:** canonical in per-ID file.
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        current_file = (
+            tmp_path / "docs" / "decisions" / "epistemic_state" / "current" / "E012.em"
+        )
+        current_file.parent.mkdir(parents=True, exist_ok=True)
+        current_file.write_text(
+            "## E012: externalized current claim (believed)\n"
+            "**Current position:** still believed\n"
+            "**Agent guidance:** monitor.\n",
+        )
+        violations = validate_epistemic_state(doc, epistemic_path=epistemic_path)
+        assert len(violations) == 1
+        assert "lack support content" in violations[0].message
 
     def test_missing_inline_and_inferred_history_file_is_violation(self, tmp_path: Path) -> None:
         doc = """\
@@ -336,6 +357,24 @@ Just a statement with no evidence chain.
         violations = validate_epistemic_state(doc, epistemic_path=epistemic_path)
         assert len(violations) == 1
         assert "matching heading for E007" in violations[0].message
+
+    def test_history_file_with_heading_only_is_violation(self, tmp_path: Path) -> None:
+        doc = """\
+## E013: heading only history (believed)
+**Current position:** still believed.
+"""
+        epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+        history_file = (
+            tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E013.em"
+        )
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        history_file.write_text(
+            "# Epistemic History\n\n"
+            "## E013: heading only history\n\n",
+        )
+        violations = validate_epistemic_state(doc, epistemic_path=epistemic_path)
+        assert len(violations) == 1
+        assert "no support content" in violations[0].message
 
     def test_external_audit_requires_evidence_at_even_with_inline_evidence(
         self, tmp_path: Path,
