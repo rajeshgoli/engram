@@ -1079,7 +1079,7 @@ class TestNextChunk:
         assert "knowledge fold chunk" in prompt_text
         assert "Pre-assigned IDs for this chunk" in prompt_text
         assert "For standard fold/workflow_synthesis chunks, use only the input file + living docs." in prompt_text
-        assert "Do NOT inspect source code/git/filesystem unless the input explicitly requires special triage verification." in prompt_text
+        assert "Do NOT inspect source code/git/filesystem for this chunk." in prompt_text
         assert "/epistemic_state/current/E*.md" in prompt_text
         assert "/epistemic_state/history/E*.md" in prompt_text
 
@@ -1111,7 +1111,8 @@ class TestNextChunk:
 
         prompt_text = result.prompt_path.read_text()
         assert str(result.context_worktree_path) in prompt_text
-        assert "Do NOT inspect source files from the project root workspace for this chunk." in prompt_text
+        assert "Do NOT inspect source code/git/filesystem for this chunk." in prompt_text
+        assert "ignore it unless a future triage chunk explicitly requires repo verification." in prompt_text
 
         cleanup_chunk_context_worktree(project, result.context_worktree_path)
         assert not result.context_worktree_path.exists()

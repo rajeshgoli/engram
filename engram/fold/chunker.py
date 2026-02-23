@@ -79,6 +79,7 @@ _QUEUE_TEXT_CACHE: OrderedDict[tuple[str, str, int, int], str] = OrderedDict()
 # Evidence bullets in external epistemic history files.
 _EVIDENCE_COMMIT_RE = re.compile(r"Evidence@([0-9a-fA-F]{7,40})")
 _EVIDENCE_COMMIT_DATE_CACHE: dict[tuple[str, str], datetime | None] = {}
+_CHUNK_WORKTREE_NAME_RE = re.compile(r"^engram-chunk-\d{3}-[0-9a-f]{8}-[A-Za-z0-9._-]+$")
 
 
 @dataclass
@@ -299,6 +300,9 @@ def cleanup_chunk_context_worktree(project_root: Path, worktree_path: Path | Non
         resolved.relative_to(temp_root_resolved)
     except ValueError:
         log.warning("Refusing to remove non-temp context worktree path: %s", worktree_path)
+        return
+    if not _CHUNK_WORKTREE_NAME_RE.fullmatch(resolved.name):
+        log.warning("Refusing to remove non-engram context worktree path: %s", worktree_path)
         return
 
     try:
@@ -1110,6 +1114,7 @@ def next_chunk(
         prompt_content = render_agent_prompt(
             chunk_id=chunk_id,
             date_range=drift_type,
+            chunk_type=drift_type,
             input_path=input_path,
             doc_paths=doc_paths,
             project_root=project_root,
@@ -1227,6 +1232,7 @@ def next_chunk(
     prompt_content = render_agent_prompt(
         chunk_id=chunk_id,
         date_range=date_range,
+        chunk_type="fold",
         input_path=input_path,
         doc_paths=doc_paths,
         project_root=project_root,

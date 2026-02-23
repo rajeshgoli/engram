@@ -176,11 +176,7 @@ For each cluster of related workflows:
 
 Input-only mode for this chunk:
 - Use ONLY this input file + the listed living docs.
-{% if context_worktree_path %}
-- If repo inspection is needed to break a tie, use ONLY the chunk context checkout above.
-{% else %}
 - Do NOT inspect source code, git history, or filesystem state.
-{% endif %}
 {% endif %}
 
 {% if drift_type == "orphan_triage" or drift_type == "epistemic_audit" %}

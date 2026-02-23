@@ -142,6 +142,7 @@ def render_agent_prompt(
     *,
     chunk_id: int,
     date_range: str,
+    chunk_type: str,
     input_path: Path,
     doc_paths: dict[str, Path],
     project_root: Path | None = None,
@@ -176,18 +177,34 @@ def render_agent_prompt(
     )
     context_path_text = str(context_worktree_path.resolve()) if context_worktree_path else None
     context_commit_short = context_commit[:12] if context_commit else None
-    if context_path_text:
+    triage_repo_inspection_types = {"orphan_triage", "epistemic_audit"}
+    if chunk_type in triage_repo_inspection_types and context_path_text:
         repo_scope_constraints = (
-            "- Prefer input + living docs first; inspect code only when needed to disambiguate.\n"
-            f"- If inspecting repo files, use ONLY the chunk context checkout at {context_path_text}"
-            + (f" (commit `{context_commit_short}`)." if context_commit_short else ".")
-            + "\n"
-            "- Do NOT inspect source files from the project root workspace for this chunk.\n"
+            "- Use this chunk's input + living docs first.\n"
+            "- Repo inspection is allowed for this triage chunk only when needed.\n"
+            f"- If inspecting repo files, use ONLY {context_path_text}"
+            + (f" (commit `{context_commit_short}`)" if context_commit_short else "")
+            + ".\n"
+            "- Do NOT inspect source files from the project-root workspace.\n"
+        )
+    elif chunk_type in triage_repo_inspection_types:
+        repo_scope_constraints = (
+            "- Use this chunk's input + living docs first.\n"
+            "- Repo inspection is allowed for this triage chunk only when needed.\n"
+            "- If no chunk context checkout is provided, inspect only this workspace.\n"
+        )
+    elif context_path_text:
+        repo_scope_constraints = (
+            "- For standard fold/workflow_synthesis chunks, use only the input file + living docs.\n"
+            "- Do NOT inspect source code/git/filesystem for this chunk.\n"
+            f"- A context checkout exists at {context_path_text}"
+            + (f" (commit `{context_commit_short}`)" if context_commit_short else "")
+            + "; ignore it unless a future triage chunk explicitly requires repo verification.\n"
         )
     else:
         repo_scope_constraints = (
             "- For standard fold/workflow_synthesis chunks, use only the input file + living docs.\n"
-            "- Do NOT inspect source code/git/filesystem unless the input explicitly requires special triage verification.\n"
+            "- Do NOT inspect source code/git/filesystem for this chunk.\n"
         )
 
     return (
