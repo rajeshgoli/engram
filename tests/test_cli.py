@@ -123,11 +123,15 @@ class TestMigrateEpistemicHistory:
         )
         assert result.exit_code == 0
         assert "Epistemic history migration complete." in result.output
+        assert "Created current files:" in result.output
+        assert "Created history files:" in result.output
         assert "Lint: PASS" in result.output
 
         updated = epistemic.read_text()
         assert "**History:**" not in updated
-        history_file = project_dir / "docs" / "decisions" / "epistemic_state" / "E005.md"
+        current_file = project_dir / "docs" / "decisions" / "epistemic_state" / "current" / "E005.em"
+        assert current_file.exists()
+        history_file = project_dir / "docs" / "decisions" / "epistemic_state" / "history" / "E005.em"
         assert history_file.exists()
 
 

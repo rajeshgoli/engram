@@ -47,7 +47,7 @@ All required fields must be present.
     ## E{NNN}: {name} (believed|contested|unverified)
     **Current position:** 1-2 sentences.
     **Agent guidance:** 1 sentence only.
-    [Optional inline **History:** is allowed, but prefer external per-ID history file.]
+    [Optional inline **History:** is allowed, but prefer external per-ID files.]
 
 **Workflow registry:**
 
@@ -96,12 +96,14 @@ Graveyard files are append-only. Never edit existing graveyard entries.
 - **Be succinct.** High information density. No filler.
 - Timeline: short factual entries. What happened, why, what resulted.
 - Concept registry: structured fields only. 5 lines ideal, 10 max.
-- Epistemic state: 1-2 sentence position. History as bullet list. 1-sentence agent guidance.
+- Epistemic state: 1-2 sentence position. 1-sentence agent guidance.
 - Workflow registry: structured fields only. Context + trigger/method.
 - DEAD/refuted entries: 1-2 sentences max. Key lesson + replacement.
 - **Budget matters.** Every line stays in context for future chunks. Be ruthless about cutting words.
-- For epistemic entries, keep the main file concise. Store detailed append-only history in inferred files:
-  `{{ epistemic_history_dir }}/E{NNN}.md` (derive from entry ID; do NOT add a `History file:` field).
+- For epistemic entries, use inferred per-ID files:
+  - Mutable current state (rewrite when E{NNN} changes): `{{ epistemic_current_dir }}/E{NNN}.em`
+  - Append-only history log (append only): `{{ epistemic_history_dir }}/E{NNN}.em`
+- Keep `{{ doc_paths.epistemic }}` concise. Put detailed, coherent per-claim state in the current file.
 
 ## Important
 
@@ -110,6 +112,7 @@ Graveyard files are append-only. Never edit existing graveyard entries.
 - Capture cross-concept relationships using stable IDs (C###, E###, W###).
 - Architect review comments on merged PRs = debt.
 - When two artifacts make contradictory claims, that's an epistemic entry.
+- For each touched E{NNN}, keep exactly one coherent current position (no contradictory parallel states).
 - Do NOT add entries about the fold process itself.
 - When a concept's source files are deleted, mark it DEAD.
 - When an ORPHANED CONCEPTS section is present, triage each one.

@@ -23,7 +23,8 @@ from engram.config import resolve_doc_paths
 from engram.epistemic_history import (
     extract_external_history_for_entry,
     extract_inline_history_lines,
-    infer_history_path,
+    infer_current_path,
+    infer_history_candidates,
 )
 from engram.fold.ids import IDAllocator, estimate_new_entities
 from engram.fold.prompt import render_agent_prompt, render_chunk_input, render_triage_input
@@ -352,25 +353,47 @@ def _extract_latest_external_history_date(
     entry_id: str | None,
     project_root: Path | None = None,
 ) -> datetime | None:
-    """Extract latest parseable date from inferred per-entry history file."""
+    """Extract latest parseable date from inferred per-entry external files."""
     if not entry_id:
         return None
-    history_path = infer_history_path(epistemic_path, entry_id)
-    if not history_path.exists():
-        return None
-    try:
-        history_text = history_path.read_text()
-    except OSError:
-        return None
-    entry_history = extract_external_history_for_entry(history_text, entry_id)
-    if not entry_history:
-        return None
-    latest_date = _extract_latest_date(entry_history)
-    latest_evidence_date = _extract_latest_evidence_commit_date(
-        entry_history=entry_history,
-        project_root=project_root,
+
+    external_sources: list[str] = []
+    candidate_paths = [infer_current_path(epistemic_path, entry_id)] + infer_history_candidates(
+        epistemic_path, entry_id,
     )
-    candidates = [dt for dt in (latest_date, latest_evidence_date) if dt is not None]
+    seen_paths: set[str] = set()
+    for path in candidate_paths:
+        key = str(path)
+        if key in seen_paths:
+            continue
+        seen_paths.add(key)
+
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        scoped = extract_external_history_for_entry(text, entry_id)
+        if scoped:
+            external_sources.append(scoped)
+
+    if not external_sources:
+        return None
+
+    candidates: list[datetime] = []
+    for source in external_sources:
+        latest_date = _extract_latest_date(source)
+        if latest_date is not None:
+            candidates.append(latest_date)
+
+        latest_evidence_date = _extract_latest_evidence_commit_date(
+            entry_history=source,
+            project_root=project_root,
+        )
+        if latest_evidence_date is not None:
+            candidates.append(latest_evidence_date)
+
     return max(candidates) if candidates else None
 
 

@@ -518,7 +518,7 @@ def migrate(project_root: str, fold_from: object) -> None:
     help="Project root directory (default: cwd).",
 )
 def migrate_epistemic_history(project_root: str) -> None:
-    """Externalize inline epistemic History blocks into inferred per-ID files."""
+    """Externalize inline epistemic history into split per-ID files."""
     from engram.config import load_config, resolve_doc_paths
     from engram.migrate_epistemic_history import externalize_epistemic_history
 
@@ -530,7 +530,8 @@ def migrate_epistemic_history(project_root: str) -> None:
     result = externalize_epistemic_history(epistemic_path)
     click.echo("Epistemic history migration complete.")
     click.echo(f"  Migrated entries: {result.migrated_entries}")
-    click.echo(f"  Created files: {result.created_files}")
+    click.echo(f"  Created current files: {result.created_current_files}")
+    click.echo(f"  Created history files: {result.created_history_files}")
     click.echo(f"  Appended blocks: {result.appended_blocks}")
 
     from engram.linter import lint_from_paths

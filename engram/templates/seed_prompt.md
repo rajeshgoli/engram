@@ -32,8 +32,7 @@ Use ONLY these IDs for new entries. Do NOT invent your own.
 
     ## E{NNN}: {name} (believed|unverified)
     **Current position:** 1-2 sentences.
-    **History:**
-    - source: "claim" → status
+    **Agent guidance:** 1 sentence.
 
 **Workflows (FULL form):**
 
@@ -47,3 +46,6 @@ Use ONLY these IDs for new entries. Do NOT invent your own.
 - Focus on what exists now, not historical evolution (that comes in subsequent chunks).
 - Capture relationships between concepts using stable IDs.
 - Mark anything uncertain as (unverified) — subsequent chunks will provide evidence.
+- For each E{NNN}, maintain inferred per-ID files:
+  - mutable current state: `{{ doc_paths.epistemic | replace('.md', '') }}/current/E{NNN}.em`
+  - append-only history: `{{ doc_paths.epistemic | replace('.md', '') }}/history/E{NNN}.em`

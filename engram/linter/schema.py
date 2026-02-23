@@ -23,7 +23,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from engram.epistemic_history import extract_external_history_for_entry, infer_history_path
+from engram.epistemic_history import (
+    extract_external_history_for_entry,
+    infer_current_path,
+    infer_history_candidates,
+)
 from engram.parse import Section, extract_id, is_stub, parse_sections
 
 
@@ -82,6 +86,18 @@ _EPISTEMIC_STATUS_RE = re.compile(
 _CONTEXT_RE = re.compile(r'^\s*-?\s*\*?\*?Context\*?\*?:', re.MULTILINE)
 _TRIGGER_RE = re.compile(r'^\s*-?\s*\*?\*?Trigger(?:\s+for\s+change)?\*?\*?:', re.MULTILINE)
 _CURRENT_METHOD_RE = re.compile(r'^\s*-?\s*\*?\*?Current method\*?\*?:', re.MULTILINE)
+
+
+def _has_external_support_content(section_text: str) -> bool:
+    """Return True when scoped external section contains non-heading content."""
+    for line in section_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            continue
+        return True
+    return False
 
 
 class Violation:
@@ -218,45 +234,110 @@ def validate_epistemic_state(content: str, epistemic_path: Path | None = None) -
             ))
             continue
 
-        # FULL requires Evidence/History inline OR inferred external history file.
+        # FULL requires Evidence/History inline OR inferred external per-ID files.
         body = section["text"]
         has_inline = bool(_EVIDENCE_RE.search(body) or _HISTORY_RE.search(body))
         history_sources = [body]
-        history_path = infer_history_path(epistemic_path, entry_id) if epistemic_path else None
+        external_support_found = False
+        external_file_seen = False
+        external_violation_seen = False
 
-        if not has_inline and history_path is None:
-            violations.append(Violation(
-                "epistemic", entry_id,
-                "Non-refuted epistemic entry missing required "
-                "'Evidence:' or 'History:' field",
-            ))
-            continue
+        current_path = infer_current_path(epistemic_path, entry_id) if epistemic_path else None
+        history_paths = (
+            infer_history_candidates(epistemic_path, entry_id) if epistemic_path else []
+        )
 
-        if history_path and history_path.exists():
+        candidate_paths = ([current_path] if current_path else []) + history_paths
+        seen_paths: set[str] = set()
+        for candidate in candidate_paths:
+            key = str(candidate)
+            if key in seen_paths:
+                continue
+            seen_paths.add(key)
+
+            if not candidate.exists():
+                continue
+            external_file_seen = True
             try:
-                external_history = history_path.read_text()
+                external_text = candidate.read_text()
             except OSError:
                 violations.append(Violation(
                     "epistemic", entry_id,
-                    f"Could not read inferred history file: {history_path}",
+                    f"Could not read inferred epistemic file: {candidate}",
                 ))
+                external_violation_seen = True
                 continue
 
-            scoped_external_history = extract_external_history_for_entry(external_history, entry_id)
-            if not scoped_external_history:
+            scoped_external = extract_external_history_for_entry(external_text, entry_id)
+            if not scoped_external:
                 violations.append(Violation(
                     "epistemic", entry_id,
-                    f"Inferred history file does not contain matching heading for {entry_id}: "
-                    f"{history_path}",
+                    f"Inferred epistemic file does not contain matching heading for {entry_id}: "
+                    f"{candidate}",
                 ))
+                external_violation_seen = True
+                continue
+
+            is_current_candidate = bool(current_path and candidate == current_path)
+            if is_current_candidate:
+                has_current_support = bool(
+                    _EVIDENCE_RE.search(scoped_external)
+                    or _HISTORY_RE.search(scoped_external)
+                    or _EVIDENCE_AT_RE.search(scoped_external)
+                )
+                if not has_current_support:
+                    continue
+            elif not _has_external_support_content(scoped_external):
+                violations.append(Violation(
+                    "epistemic", entry_id,
+                    "Inferred epistemic history file has no support content for "
+                    f"{entry_id}: {candidate}",
+                ))
+                external_violation_seen = True
+                continue
+
+            history_sources.append(scoped_external)
+            external_support_found = True
+
+        if not has_inline and not external_support_found:
+            if external_violation_seen:
+                continue
+
+            preferred_history = history_paths[0] if history_paths else None
+            if not external_file_seen:
+                if preferred_history and current_path:
+                    missing_msg = (
+                        "Missing inline 'Evidence:'/'History:' and inferred epistemic files "
+                        f"not found: current={current_path}, history={preferred_history}"
+                    )
+                elif preferred_history:
+                    missing_msg = (
+                        "Missing inline 'Evidence:'/'History:' and inferred history file "
+                        f"not found: {preferred_history}"
+                    )
+                elif current_path:
+                    missing_msg = (
+                        "Missing inline 'Evidence:'/'History:' and inferred current-state file "
+                        f"not found: {current_path}"
+                    )
+                else:
+                    missing_msg = (
+                        "Non-refuted epistemic entry missing required "
+                        "'Evidence:' or 'History:' field"
+                    )
             else:
-                history_sources.append(scoped_external_history)
-        elif not has_inline:
-            violations.append(Violation(
-                "epistemic", entry_id,
-                "Missing inline 'Evidence:'/'History:' and inferred history file "
-                f"not found: {history_path}",
-            ))
+                if preferred_history and current_path:
+                    missing_msg = (
+                        "Missing inline 'Evidence:'/'History:' and inferred epistemic files "
+                        "lack support content: "
+                        f"current={current_path}, history={preferred_history}"
+                    )
+                else:
+                    missing_msg = (
+                        "Missing inline 'Evidence:'/'History:' and inferred epistemic files "
+                        "lack support content"
+                    )
+            violations.append(Violation("epistemic", entry_id, missing_msg))
             continue
 
         history_source_text = "\n".join(history_sources)

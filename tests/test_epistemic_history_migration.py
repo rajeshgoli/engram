@@ -21,14 +21,19 @@ def test_externalizes_inline_history_into_inferred_file(tmp_path: Path) -> None:
 
     result = externalize_epistemic_history(epistemic)
     assert result.migrated_entries == 1
-    assert result.created_files == 1
+    assert result.created_history_files == 1
+    assert result.created_current_files == 1
     assert result.appended_blocks == 1
 
     updated = epistemic.read_text()
     assert "**History:**" not in updated
     assert "Ground truth annotation > voting (believed)" in updated
 
-    history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E005.md"
+    current_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "current" / "E005.em"
+    assert current_file.exists()
+    assert "## E005:" in current_file.read_text()
+
+    history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E005.em"
     assert history_file.exists()
     content = history_file.read_text()
     assert "## E005:" in content
@@ -48,9 +53,12 @@ def test_migration_is_noop_when_no_inline_history(tmp_path: Path) -> None:
 
     result = externalize_epistemic_history(epistemic)
     assert result.migrated_entries == 0
-    assert result.created_files == 0
+    assert result.created_history_files == 0
+    assert result.created_current_files == 1
     assert result.appended_blocks == 0
     assert epistemic.read_text() == before
+    current_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "current" / "E010.em"
+    assert current_file.exists()
 
 
 def test_bold_history_header_does_not_emit_stray_marker(tmp_path: Path) -> None:
@@ -66,7 +74,7 @@ def test_bold_history_header_does_not_emit_stray_marker(tmp_path: Path) -> None:
     )
 
     externalize_epistemic_history(epistemic)
-    history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E015.md"
+    history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E015.em"
     content = history_file.read_text()
     assert "- **" not in content
     assert "- Product Dec 12: validated" in content
@@ -92,7 +100,36 @@ def test_unknown_bold_field_after_history_is_preserved(tmp_path: Path) -> None:
     assert "**Agent guidance:** continue." in updated
     assert "**History:**" not in updated
 
-    history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E020.md"
+    history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E020.em"
     content = history_file.read_text()
     assert "2026-02-21: validated from timeline" in content
     assert "Custom note" not in content
+
+
+def test_migration_rerun_preserves_existing_current_file(tmp_path: Path) -> None:
+    epistemic = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+    epistemic.parent.mkdir(parents=True, exist_ok=True)
+    epistemic.write_text(
+        "# Epistemic State\n\n"
+        "## E030: preserve current edits (believed)\n"
+        "**Current position:** from main doc.\n"
+        "**History:**\n"
+        "- 2026-02-21: initial\n"
+        "**Agent guidance:** baseline.\n",
+    )
+
+    first = externalize_epistemic_history(epistemic)
+    assert first.created_current_files == 1
+
+    current_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "current" / "E030.em"
+    current_file.write_text(
+        "## E030: preserve current edits (believed)\n"
+        "**Current position:** user-updated current file.\n"
+        "**History:**\n"
+        "- Evidence@a3e0b731 docs/decisions/timeline.md:10: validated -> believed\n"
+        "**Agent guidance:** keep this edit.\n",
+    )
+
+    second = externalize_epistemic_history(epistemic)
+    assert second.created_current_files == 0
+    assert "user-updated current file" in current_file.read_text()
