@@ -398,12 +398,13 @@ def _enforce_single_active_chunk(project_root: Path) -> None:
             raw = ""
 
         subjects = ""
-        # Only consider commits strictly AFTER lock creation time.
-        # (Second-level git timestamps can equal the lock second; use strict >.)
+        # Only consider commits at/after lock creation time.
+        # Git commit timestamps are second-granularity; equality is common in
+        # fast automated flows where lock creation and commit happen quickly.
         for line in raw.splitlines():
             try:
                 ts_str, subj = line.split("\t", 1)
-                if int(ts_str) > int(created_epoch):
+                if int(ts_str) >= int(created_epoch):
                     subjects += subj + "\n"
             except ValueError:
                 continue

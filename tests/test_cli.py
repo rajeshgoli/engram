@@ -170,6 +170,7 @@ class TestActiveChunkLock:
         assert r3.exit_code == 0
 
     def test_auto_clear_does_not_unlock_on_older_matching_commit(self, runner: CliRunner, project_dir: Path) -> None:
+        import os
         import subprocess
 
         init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
@@ -181,11 +182,17 @@ class TestActiveChunkLock:
         subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(project_dir), check=True)
         (project_dir / "README.md").write_text("x\n")
         subprocess.run(["git", "add", "README.md"], cwd=str(project_dir), check=True)
+        old_env = {
+            **os.environ,
+            "GIT_AUTHOR_DATE": "2020-01-01T00:00:00Z",
+            "GIT_COMMITTER_DATE": "2020-01-01T00:00:00Z",
+        }
         subprocess.run(
             ["git", "commit", "-m", "Knowledge fold: chunk 1 (old)"],
             cwd=str(project_dir),
             check=True,
             capture_output=True,
+            env=old_env,
         )
 
         # Create docs referenced by the queue
@@ -260,3 +267,45 @@ class TestActiveChunkLock:
         assert result.exit_code == 0
         assert observed["lock_seen"] is True
         assert not (project_dir / ".engram" / "active_chunk.lock").exists()
+
+    def test_auto_clear_includes_same_second_commit_timestamp(self, project_dir: Path, monkeypatch) -> None:
+        from datetime import datetime, timezone
+        import subprocess
+        from engram import cli as cli_module
+
+        (project_dir / ".engram").mkdir(parents=True, exist_ok=True)
+        lock_path = project_dir / ".engram" / "active_chunk.yaml"
+        created_at = "2026-01-01T00:00:05Z"
+        created_epoch = int(
+            datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            .astimezone(timezone.utc)
+            .timestamp(),
+        )
+        lock_path.write_text(
+            yaml.safe_dump(
+                {
+                    "chunk_id": 12,
+                    "created_at": created_at,
+                    "input_path": "dummy.md",
+                },
+                sort_keys=True,
+            ),
+        )
+
+        class DummyProc:
+            def __init__(self, returncode: int = 0, stdout: str = "") -> None:
+                self.returncode = returncode
+                self.stdout = stdout
+
+        def fake_run(args, cwd=None, capture_output=False, text=False, check=False):  # noqa: ANN001
+            if args[:3] == ["git", "rev-parse", "--is-inside-work-tree"]:
+                return DummyProc(returncode=0, stdout="true\n")
+            if args[:4] == ["git", "log", "-n", "200"]:
+                # Same second as created_at; should be included and clear the lock.
+                return DummyProc(returncode=0, stdout=f"{created_epoch}\tKnowledge fold: chunk 12\n")
+            raise AssertionError(f"Unexpected subprocess args: {args}")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        cli_module._enforce_single_active_chunk(project_dir)
+        assert not lock_path.exists()
