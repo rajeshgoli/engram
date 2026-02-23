@@ -1,11 +1,8 @@
 """Helpers for externalized per-ID epistemic files.
 
-Preferred split layout:
-- Mutable current state: ``<epistemic_state_stem>/current/<EID>.em``
-- Append-only history: ``<epistemic_state_stem>/history/<EID>.em``
-
-Legacy compatibility:
-- Prior layouts used ``<epistemic_state_stem>/<EID>.md`` as a single file.
+Canonical layout:
+- Mutable current state: ``<epistemic_state_stem>/current/<EID>.md``
+- Append-only history: ``<epistemic_state_stem>/history/<EID>.md``
 """
 
 from __future__ import annotations
@@ -42,8 +39,8 @@ _ENTRY_HEADING_RE = re.compile(r"^##\s+(E\d{3,})\b", re.IGNORECASE)
 class EpistemicLayout:
     """Resolved per-ID epistemic file layout for a project."""
 
-    mode: str  # "split" | "legacy"
-    current_dir: Path | None
+    mode: str  # always "split"
+    current_dir: Path
     history_dir: Path
     file_glob: str
     extension: str
@@ -91,7 +88,7 @@ def infer_history_dir(epistemic_doc_path: Path) -> Path:
 
 def infer_history_path(epistemic_doc_path: Path, entry_id: str) -> Path:
     """Return inferred append-only history file path for an epistemic entry."""
-    return infer_history_dir(epistemic_doc_path) / f"{entry_id}.em"
+    return infer_history_dir(epistemic_doc_path) / f"{entry_id}.md"
 
 
 def infer_epistemic_dir(epistemic_doc_path: Path) -> Path:
@@ -106,7 +103,7 @@ def infer_current_dir(epistemic_doc_path: Path) -> Path:
 
 def infer_current_path(epistemic_doc_path: Path, entry_id: str) -> Path:
     """Return inferred mutable current-state file path for an epistemic entry."""
-    return infer_current_dir(epistemic_doc_path) / f"{entry_id}.em"
+    return infer_current_dir(epistemic_doc_path) / f"{entry_id}.md"
 
 
 def infer_legacy_history_path(epistemic_doc_path: Path, entry_id: str) -> Path:
@@ -115,62 +112,20 @@ def infer_legacy_history_path(epistemic_doc_path: Path, entry_id: str) -> Path:
 
 
 def infer_history_candidates(epistemic_doc_path: Path, entry_id: str) -> list[Path]:
-    """Return history file path candidates in preference order.
-
-    Returns:
-    1) New split history path (history/E###.em)
-    2) Legacy single-file path (E###.md)
-    """
-    primary = infer_history_path(epistemic_doc_path, entry_id)
-    legacy = infer_legacy_history_path(epistemic_doc_path, entry_id)
-    if primary == legacy:
-        return [primary]
-    return [primary, legacy]
+    """Return canonical split history path candidate(s)."""
+    return [infer_history_path(epistemic_doc_path, entry_id)]
 
 
 def detect_epistemic_layout(epistemic_doc_path: Path) -> EpistemicLayout:
-    """Detect whether project uses split or legacy per-ID epistemic files.
-
-    Detection order:
-    1) If split dirs/files are present, use split layout.
-    2) Else if legacy ``E*.md`` files are present, use legacy layout.
-    3) Else default to split layout for new projects.
-    """
-    base = infer_epistemic_dir(epistemic_doc_path)
+    """Return canonical split per-ID epistemic layout."""
     current_dir = infer_current_dir(epistemic_doc_path)
     history_dir = infer_history_dir(epistemic_doc_path)
-
-    split_present = (
-        current_dir.exists()
-        or history_dir.exists()
-        or bool(list(current_dir.glob("E*.em")))
-        or bool(list(history_dir.glob("E*.em")))
-    )
-    if split_present:
-        return EpistemicLayout(
-            mode="split",
-            current_dir=current_dir,
-            history_dir=history_dir,
-            file_glob="E*.em",
-            extension=".em",
-        )
-
-    legacy_present = bool(list(base.glob("E*.md")))
-    if legacy_present:
-        return EpistemicLayout(
-            mode="legacy",
-            current_dir=None,
-            history_dir=base,
-            file_glob="E*.md",
-            extension=".md",
-        )
-
     return EpistemicLayout(
         mode="split",
         current_dir=current_dir,
         history_dir=history_dir,
-        file_glob="E*.em",
-        extension=".em",
+        file_glob="E*.md",
+        extension=".md",
     )
 
 

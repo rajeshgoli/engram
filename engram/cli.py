@@ -551,12 +551,16 @@ def migrate_epistemic_history(project_root: str) -> None:
     doc_paths = resolve_doc_paths(config, root)
     epistemic_path = doc_paths["epistemic"]
 
-    result = externalize_epistemic_history(epistemic_path)
+    try:
+        result = externalize_epistemic_history(epistemic_path)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
     click.echo("Epistemic history migration complete.")
     click.echo(f"  Migrated entries: {result.migrated_entries}")
     click.echo(f"  Created current files: {result.created_current_files}")
     click.echo(f"  Created history files: {result.created_history_files}")
     click.echo(f"  Appended blocks: {result.appended_blocks}")
+    click.echo(f"  Migrated legacy files: {result.migrated_legacy_files}")
 
     from engram.linter import lint_from_paths
     lint_result = lint_from_paths(root, config)

@@ -36,11 +36,11 @@ def _stringify_paths(doc_paths: dict[str, Path]) -> dict[str, str]:
 
 
 def _epistemic_layout_template_vars(doc_paths: dict[str, Path]) -> dict[str, str]:
-    """Resolve epistemic layout vars for template/prompt rendering."""
+    """Resolve canonical split epistemic layout vars for templates/prompts."""
     layout = detect_epistemic_layout(doc_paths["epistemic"])
     return {
         "epistemic_layout_mode": layout.mode,
-        "epistemic_current_dir": str(layout.current_dir) if layout.current_dir else "",
+        "epistemic_current_dir": str(layout.current_dir),
         "epistemic_history_dir": str(layout.history_dir),
         "epistemic_history_glob": layout.file_glob,
         "epistemic_history_ext": layout.extension,
@@ -157,25 +157,13 @@ def render_agent_prompt(
         else "engram lint --project-root <project_root>"
     )
     layout_vars = _epistemic_layout_template_vars(doc_paths)
-    epistemic_mode = layout_vars["epistemic_layout_mode"]
     epistemic_history_dir = layout_vars["epistemic_history_dir"]
-    epistemic_history_glob = layout_vars["epistemic_history_glob"]
     epistemic_current_dir = layout_vars["epistemic_current_dir"]
-
-    if epistemic_mode == "legacy":
-        epistemic_constraints = (
-            f"- This project uses legacy per-ID epistemic files under "
-            f"{epistemic_history_dir}/{epistemic_history_glob}.\n"
-            f"- Do NOT create split `current/` or `history/` epistemic files unless explicitly migrating.\n"
-            f"- Do NOT read per-ID epistemic files under {epistemic_history_dir}/{epistemic_history_glob}.\n"
-            f"  They are append-only logs in this project; append via Bash without opening them.\n"
-        )
-    else:
-        epistemic_constraints = (
-            f"- Epistemic current-state files live under {epistemic_current_dir}/E*.em and are editable.\n"
-            f"- Do NOT read per-ID epistemic history files under {epistemic_history_dir}/E*.em.\n"
-            f"  They are append-only logs; when needed, append via Bash without opening them.\n"
-        )
+    epistemic_constraints = (
+        f"- Epistemic current-state files live under {epistemic_current_dir}/E*.md and are editable.\n"
+        f"- Do NOT read per-ID epistemic history files under {epistemic_history_dir}/E*.md.\n"
+        f"  They are append-only logs; when needed, append via Bash without opening them.\n"
+    )
 
     return (
         f"You are processing a knowledge fold chunk.\n"

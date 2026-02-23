@@ -93,10 +93,8 @@ For each entry below:
 - **Confirm** if still valid. Keep status and append a fresh, claim-specific
   history update to `{{ epistemic_history_dir }}/E{NNN}{{ epistemic_history_ext }}` for that entry ID:
   `- Evidence@<commit> <path>:<line>: <finding> -> believed|unverified`
-{% if epistemic_layout_mode == "split" %}
-- Rewrite the mutable current-state file `{{ epistemic_current_dir }}/E{NNN}.em`
+- Rewrite the mutable current-state file `{{ epistemic_current_dir }}/E{NNN}.md`
   so it reflects one coherent, up-to-date position for the claim.
-{% endif %}
 - **Refute** if no longer true. Move to {{ doc_paths.epistemic_graveyard }} and replace with stub.
 - **Supersede** if the belief changed. Update to the current claim with clear evidence/history.
 - If no direct evidence exists for a retained belief, downgrade status (`believed` -> `contested|unverified`) or move to graveyard if refuted.

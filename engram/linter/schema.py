@@ -26,7 +26,7 @@ from pathlib import Path
 from engram.epistemic_history import (
     extract_external_history_for_entry,
     infer_current_path,
-    infer_history_candidates,
+    infer_history_path,
 )
 from engram.parse import Section, extract_id, is_stub, parse_sections
 
@@ -243,9 +243,7 @@ def validate_epistemic_state(content: str, epistemic_path: Path | None = None) -
         external_violation_seen = False
 
         current_path = infer_current_path(epistemic_path, entry_id) if epistemic_path else None
-        history_paths = (
-            infer_history_candidates(epistemic_path, entry_id) if epistemic_path else []
-        )
+        history_paths = [infer_history_path(epistemic_path, entry_id)] if epistemic_path else []
 
         candidate_paths = ([current_path] if current_path else []) + history_paths
         seen_paths: set[str] = set()
