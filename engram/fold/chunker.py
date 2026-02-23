@@ -737,6 +737,18 @@ def _find_workflow_repetitions(workflows_path: Path) -> list[dict]:
     return results
 
 
+def _workflow_ids_signature(workflow_entries: list[dict[str, Any]]) -> str | None:
+    """Return stable signature for CURRENT workflow ID membership."""
+    ids = sorted(
+        str(entry_id).upper()
+        for entry in workflow_entries
+        if (entry_id := entry.get("id"))
+    )
+    if not ids:
+        return None
+    return ",".join(ids)
+
+
 def scan_drift(
     config: dict,
     project_root: Path,
@@ -917,12 +929,21 @@ def next_chunk(
             current_hash = _sha256_file_text(workflows_path)
         else:
             current_hash = None
+        current_ids_signature = _workflow_ids_signature(drift.workflow_repetitions)
 
         last_attempt = _read_last_workflow_synthesis_attempt(manifest_file)
-        if (
-            current_hash
-            and last_attempt
+        same_hash = (
+            bool(current_hash)
+            and bool(last_attempt)
             and last_attempt.get("workflow_registry_hash") == current_hash
+        )
+        same_ids = (
+            bool(current_ids_signature)
+            and bool(last_attempt)
+            and last_attempt.get("workflow_ids_signature") == current_ids_signature
+        )
+        if (
+            (same_hash or same_ids)
             and isinstance(last_attempt.get("id"), int)
         ):
             existing = list(chunks_dir.glob("chunk_*_input.md"))
@@ -987,6 +1008,9 @@ def next_chunk(
                     wf_hash = _sha256_file_text(workflows_path)
                     if wf_hash:
                         fh.write(f"  workflow_registry_hash: {wf_hash}\n")
+                wf_ids_signature = _workflow_ids_signature(drift.workflow_repetitions)
+                if wf_ids_signature:
+                    fh.write(f"  workflow_ids_signature: \"{wf_ids_signature}\"\n")
 
         return ChunkResult(
             chunk_id=chunk_id,

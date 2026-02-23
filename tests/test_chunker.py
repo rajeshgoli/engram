@@ -1210,6 +1210,36 @@ class TestNextChunk:
             f"Expected fold chunk after synthesis already ran, got {r2.chunk_type}"
         )
 
+    def test_workflow_synthesis_not_repeated_for_same_ids_after_edit(self, project, config):
+        """workflow_synthesis should cooldown when only same CURRENT IDs are edited."""
+        workflows = project / "docs" / "decisions" / "workflow_registry.md"
+        workflows.write_text(
+            "# Workflow Registry\n\n"
+            "## W001: deploy_process (CURRENT)\n- **Context:** Deploy.\n\n"
+            "## W002: review_process (CURRENT)\n- **Context:** Review.\n\n"
+            "## W003: test_process (CURRENT)\n- **Context:** Test.\n\n"
+            "## W004: release_process (CURRENT)\n- **Context:** Release.\n\n"
+        )
+        _write_queue(project, [_make_doc_item(chars=100), _make_doc_item(chars=100)])
+
+        first = next_chunk(config, project)
+        assert first.chunk_type == "workflow_synthesis"
+
+        workflows.write_text(
+            "# Workflow Registry\n\n"
+            "## W001: deploy_process (CURRENT)\n"
+            "- **Context:** Deploy.\n"
+            "- **Current method:** Clarified without changing workflow membership.\n\n"
+            "## W002: review_process (CURRENT)\n- **Context:** Review.\n\n"
+            "## W003: test_process (CURRENT)\n- **Context:** Test.\n\n"
+            "## W004: release_process (CURRENT)\n- **Context:** Release.\n\n"
+        )
+
+        second = next_chunk(config, project)
+        assert second.chunk_type == "fold", (
+            f"Expected fold chunk after same-ID edit, got {second.chunk_type}"
+        )
+
     def test_workflow_synthesis_can_retry_after_cooldown(self, project, config):
         workflows = project / "docs" / "decisions" / "workflow_registry.md"
         workflows.write_text(
