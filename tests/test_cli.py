@@ -125,15 +125,31 @@ class TestMigrateEpistemicHistory:
         assert "Epistemic history migration complete." in result.output
         assert "Created current files:" in result.output
         assert "Created history files:" in result.output
-        assert "Migrated legacy files:" in result.output
         assert "Lint: PASS" in result.output
 
         updated = epistemic.read_text()
         assert "**History:**" not in updated
-        current_file = project_dir / "docs" / "decisions" / "epistemic_state" / "current" / "E005.em"
+        current_file = project_dir / "docs" / "decisions" / "epistemic_state" / "current" / "E005.md"
         assert current_file.exists()
-        history_file = project_dir / "docs" / "decisions" / "epistemic_state" / "history" / "E005.em"
+        history_file = project_dir / "docs" / "decisions" / "epistemic_state" / "history" / "E005.md"
         assert history_file.exists()
+
+    def test_fails_with_legacy_per_id_files(self, runner: CliRunner, project_dir: Path) -> None:
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        legacy_file = project_dir / "docs" / "decisions" / "epistemic_state" / "E005.md"
+        legacy_file.parent.mkdir(parents=True, exist_ok=True)
+        legacy_file.write_text("# legacy\n")
+
+        result = runner.invoke(
+            cli,
+            ["migrate-epistemic-history", "--project-root", str(project_dir)],
+        )
+        assert result.exit_code != 0
+        assert "Legacy epistemic files found under the deprecated path." in result.output
+        assert "Move files from" in result.output
+        assert "history/E*.md" in result.output
 
 
 class TestActiveChunkLock:

@@ -459,8 +459,8 @@ class TestTriagePromptTemporalContext:
         assert "git worktree add /tmp/engram-epistemic-abc123de" in output
         assert "Evidence@<commit>" in output
         assert "Do NOT use generic lines like `reaffirmed -> believed`." in output
-        assert "/epistemic_state/history/E{NNN}.em" in output
-        assert "/epistemic_state/current/E{NNN}.em" in output
+        assert "/epistemic_state/history/E{NNN}.md" in output
+        assert "/epistemic_state/current/E{NNN}.md" in output
 
     def test_epistemic_audit_uses_split_paths_even_when_legacy_files_exist(self, tmp_path: Path) -> None:
         from engram.fold.prompt import render_triage_input
@@ -487,8 +487,8 @@ class TestTriagePromptTemporalContext:
             ref_commit="abc123def456789012345678901234567890abcd",
             ref_date="2026-01-01",
         )
-        assert "/epistemic_state/history/E{NNN}.em" in output
-        assert "/epistemic_state/current/E{NNN}.em" in output
+        assert "/epistemic_state/history/E{NNN}.md" in output
+        assert "/epistemic_state/current/E{NNN}.md" in output
         assert "/epistemic_state/E{NNN}.md" not in output
 
 

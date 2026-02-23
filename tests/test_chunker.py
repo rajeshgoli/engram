@@ -384,7 +384,7 @@ class TestFindClaimsByStatus:
             "**Current position:** disputed.\n"
         )
         history_file = (
-            project / "docs" / "decisions" / "epistemic_state" / "history" / "E021.em"
+            project / "docs" / "decisions" / "epistemic_state" / "history" / "E021.md"
         )
         history_file.parent.mkdir(parents=True, exist_ok=True)
         history_file.write_text(
@@ -468,7 +468,7 @@ class TestFindStaleEpistemicEntries:
 
         history_dir = project / "docs" / "decisions" / "epistemic_state" / "history"
         history_dir.mkdir(parents=True, exist_ok=True)
-        (history_dir / "E087.em").write_text(
+        (history_dir / "E087.md").write_text(
             "## E087: inner structure pruning impact\n"
             f"- Evidence@{sha} docs/decisions/epistemic_state.md:1: audit update -> believed\n"
         )
@@ -493,7 +493,7 @@ class TestFindStaleEpistemicEntries:
 
         history_dir = project / "docs" / "decisions" / "epistemic_state" / "history"
         history_dir.mkdir(parents=True, exist_ok=True)
-        (history_dir / "E088.em").write_text(
+        (history_dir / "E088.md").write_text(
             "## E088: some claim\n"
             "- Evidence@deadbeef docs/decisions/epistemic_state.md:1: unknown -> believed\n"
         )
@@ -753,7 +753,7 @@ class TestFindStaleEpistemicEntries:
             "**Current position:** still believed.\n"
         )
         history_file = (
-            project / "docs" / "decisions" / "epistemic_state" / "history" / "E022.em"
+            project / "docs" / "decisions" / "epistemic_state" / "history" / "E022.md"
         )
         history_file.parent.mkdir(parents=True, exist_ok=True)
         history_file.write_text(
@@ -776,7 +776,7 @@ class TestFindStaleEpistemicEntries:
             f"- {old_date}: old inline\n"
         )
         history_file = (
-            project / "docs" / "decisions" / "epistemic_state" / "history" / "E023.em"
+            project / "docs" / "decisions" / "epistemic_state" / "history" / "E023.md"
         )
         history_file.parent.mkdir(parents=True, exist_ok=True)
         history_file.write_text(
@@ -798,7 +798,7 @@ class TestFindStaleEpistemicEntries:
             f"- {old_date}: stale inline\n",
         )
         current_file = (
-            project / "docs" / "decisions" / "epistemic_state" / "current" / "E089.em"
+            project / "docs" / "decisions" / "epistemic_state" / "current" / "E089.md"
         )
         current_file.parent.mkdir(parents=True, exist_ok=True)
         current_file.write_text(
@@ -819,7 +819,7 @@ class TestFindStaleEpistemicEntries:
             "**Current position:** still believed.\n"
         )
         history_file = (
-            project / "docs" / "decisions" / "epistemic_state" / "history" / "E024.em"
+            project / "docs" / "decisions" / "epistemic_state" / "history" / "E024.md"
         )
         history_file.parent.mkdir(parents=True, exist_ok=True)
         history_file.write_text(
@@ -1074,8 +1074,8 @@ class TestNextChunk:
         prompt_text = result.prompt_path.read_text()
         assert "knowledge fold chunk" in prompt_text
         assert "Pre-assigned IDs for this chunk" in prompt_text
-        assert "/epistemic_state/current/E*.em" in prompt_text
-        assert "/epistemic_state/history/E*.em" in prompt_text
+        assert "/epistemic_state/current/E*.md" in prompt_text
+        assert "/epistemic_state/history/E*.md" in prompt_text
 
     def test_prompt_uses_split_epistemic_paths_when_legacy_files_present(self, project, config):
         legacy = project / "docs" / "decisions" / "epistemic_state" / "E005.md"
@@ -1089,8 +1089,8 @@ class TestNextChunk:
 
         result = next_chunk(config, project)
         prompt_text = result.prompt_path.read_text()
-        assert "/epistemic_state/current/E*.em" in prompt_text
-        assert "/epistemic_state/history/E*.em" in prompt_text
+        assert "/epistemic_state/current/E*.md" in prompt_text
+        assert "/epistemic_state/history/E*.md" in prompt_text
         assert "/epistemic_state/E*.md" not in prompt_text
 
     def test_pre_assigned_ids_do_not_collide_with_existing_doc_ids(self, project, config):

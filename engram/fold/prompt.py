@@ -160,8 +160,8 @@ def render_agent_prompt(
     epistemic_history_dir = layout_vars["epistemic_history_dir"]
     epistemic_current_dir = layout_vars["epistemic_current_dir"]
     epistemic_constraints = (
-        f"- Epistemic current-state files live under {epistemic_current_dir}/E*.em and are editable.\n"
-        f"- Do NOT read per-ID epistemic history files under {epistemic_history_dir}/E*.em.\n"
+        f"- Epistemic current-state files live under {epistemic_current_dir}/E*.md and are editable.\n"
+        f"- Do NOT read per-ID epistemic history files under {epistemic_history_dir}/E*.md.\n"
         f"  They are append-only logs; when needed, append via Bash without opening them.\n"
     )
 

@@ -1,8 +1,8 @@
 """Helpers for externalized per-ID epistemic files.
 
 Canonical layout:
-- Mutable current state: ``<epistemic_state_stem>/current/<EID>.em``
-- Append-only history: ``<epistemic_state_stem>/history/<EID>.em``
+- Mutable current state: ``<epistemic_state_stem>/current/<EID>.md``
+- Append-only history: ``<epistemic_state_stem>/history/<EID>.md``
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ def infer_history_dir(epistemic_doc_path: Path) -> Path:
 
 def infer_history_path(epistemic_doc_path: Path, entry_id: str) -> Path:
     """Return inferred append-only history file path for an epistemic entry."""
-    return infer_history_dir(epistemic_doc_path) / f"{entry_id}.em"
+    return infer_history_dir(epistemic_doc_path) / f"{entry_id}.md"
 
 
 def infer_epistemic_dir(epistemic_doc_path: Path) -> Path:
@@ -103,7 +103,7 @@ def infer_current_dir(epistemic_doc_path: Path) -> Path:
 
 def infer_current_path(epistemic_doc_path: Path, entry_id: str) -> Path:
     """Return inferred mutable current-state file path for an epistemic entry."""
-    return infer_current_dir(epistemic_doc_path) / f"{entry_id}.em"
+    return infer_current_dir(epistemic_doc_path) / f"{entry_id}.md"
 
 
 def infer_legacy_history_path(epistemic_doc_path: Path, entry_id: str) -> Path:
@@ -124,8 +124,8 @@ def detect_epistemic_layout(epistemic_doc_path: Path) -> EpistemicLayout:
         mode="split",
         current_dir=current_dir,
         history_dir=history_dir,
-        file_glob="E*.em",
-        extension=".em",
+        file_glob="E*.md",
+        extension=".md",
     )
 
 

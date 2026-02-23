@@ -103,8 +103,8 @@ Graveyard files are append-only. Never edit existing graveyard entries.
 - DEAD/refuted entries: 1-2 sentences max. Key lesson + replacement.
 - **Budget matters.** Every line stays in context for future chunks. Be ruthless about cutting words.
 - For epistemic entries, use inferred per-ID files:
-  - Mutable current state (rewrite when E{NNN} changes): `{{ epistemic_current_dir }}/E{NNN}.em`
-  - Append-only history log (append only): `{{ epistemic_history_dir }}/E{NNN}.em`
+  - Mutable current state (rewrite when E{NNN} changes): `{{ epistemic_current_dir }}/E{NNN}.md`
+  - Append-only history log (append only): `{{ epistemic_history_dir }}/E{NNN}.md`
 - Keep `{{ doc_paths.epistemic }}` concise. Put detailed, coherent per-claim state in the current file.
 
 ## Important

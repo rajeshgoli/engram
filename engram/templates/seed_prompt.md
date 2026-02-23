@@ -47,5 +47,5 @@ Use ONLY these IDs for new entries. Do NOT invent your own.
 - Capture relationships between concepts using stable IDs.
 - Mark anything uncertain as (unverified) — subsequent chunks will provide evidence.
 - For each E{NNN}, maintain inferred per-ID files:
-  - mutable current state: `{{ doc_paths.epistemic | replace('.md', '') }}/current/E{NNN}.em`
-  - append-only history: `{{ doc_paths.epistemic | replace('.md', '') }}/history/E{NNN}.em`
+  - mutable current state: `{{ doc_paths.epistemic | replace('.md', '') }}/current/E{NNN}.md`
+  - append-only history: `{{ doc_paths.epistemic | replace('.md', '') }}/history/E{NNN}.md`

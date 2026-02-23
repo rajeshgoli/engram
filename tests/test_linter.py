@@ -282,7 +282,7 @@ Just a statement with no evidence chain.
 """
         epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
         history_file = (
-            tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E005.em"
+            tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E005.md"
         )
         history_file.parent.mkdir(parents=True, exist_ok=True)
         history_file.write_text(
@@ -299,7 +299,7 @@ Just a statement with no evidence chain.
 """
         epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
         current_file = (
-            tmp_path / "docs" / "decisions" / "epistemic_state" / "current" / "E004.em"
+            tmp_path / "docs" / "decisions" / "epistemic_state" / "current" / "E004.md"
         )
         current_file.parent.mkdir(parents=True, exist_ok=True)
         current_file.write_text(
@@ -318,7 +318,7 @@ Just a statement with no evidence chain.
 """
         epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
         current_file = (
-            tmp_path / "docs" / "decisions" / "epistemic_state" / "current" / "E012.em"
+            tmp_path / "docs" / "decisions" / "epistemic_state" / "current" / "E012.md"
         )
         current_file.parent.mkdir(parents=True, exist_ok=True)
         current_file.write_text(
@@ -347,7 +347,7 @@ Just a statement with no evidence chain.
 """
         epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
         history_file = (
-            tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E007.em"
+            tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E007.md"
         )
         history_file.parent.mkdir(parents=True, exist_ok=True)
         history_file.write_text(
@@ -365,7 +365,7 @@ Just a statement with no evidence chain.
 """
         epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
         history_file = (
-            tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E013.em"
+            tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E013.md"
         )
         history_file.parent.mkdir(parents=True, exist_ok=True)
         history_file.write_text(
@@ -385,7 +385,7 @@ Just a statement with no evidence chain.
 """
         epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
         history_file = (
-            tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E008.em"
+            tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E008.md"
         )
         history_file.parent.mkdir(parents=True, exist_ok=True)
         history_file.write_text(
@@ -406,7 +406,7 @@ Just a statement with no evidence chain.
 """
         epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
         history_file = (
-            tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E009.em"
+            tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E009.md"
         )
         history_file.parent.mkdir(parents=True, exist_ok=True)
         history_file.write_text(
@@ -427,7 +427,7 @@ Just a statement with no evidence chain.
 """
         epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
         history_file = (
-            tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E010.em"
+            tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E010.md"
         )
         history_file.parent.mkdir(parents=True, exist_ok=True)
         history_file.write_text(
@@ -450,7 +450,7 @@ Just a statement with no evidence chain.
 """
         epistemic_path = tmp_path / "docs" / "decisions" / "epistemic_state.md"
         history_file = (
-            tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E011.em"
+            tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E011.md"
         )
         history_file.parent.mkdir(parents=True, exist_ok=True)
         history_file.write_text(

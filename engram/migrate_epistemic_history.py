@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from engram.epistemic_history import (
-    extract_external_history_for_entry,
     infer_current_path,
     infer_epistemic_dir,
     infer_history_path,
@@ -24,7 +23,6 @@ class EpistemicHistoryMigrationResult:
     created_history_files: int
     created_current_files: int
     appended_blocks: int
-    migrated_legacy_files: int
 
 
 def _extract_subject(heading: str) -> str:
@@ -101,76 +99,40 @@ def _append_history_lines(path: Path, lines: list[str]) -> None:
         fh.write("\n")
 
 
-def _append_history_block(path: Path, block_text: str) -> bool:
-    """Append a raw history block to a per-ID history file."""
-    block = block_text.strip()
-    if not block:
-        return False
-
-    text = path.read_text()
-    with open(path, "a") as fh:
-        if not text.endswith("\n"):
-            fh.write("\n")
-        fh.write(f"{block}\n\n")
-    return True
-
-
-def _migrate_legacy_history_files(
-    *,
-    epistemic_path: Path,
-    subjects_by_id: dict[str, str],
-) -> tuple[int, int, int]:
-    """Move legacy per-ID ``E*.md`` files into split history files.
-
-    Returns ``(migrated_legacy_files, created_history_files, appended_blocks)``.
-    """
+def find_legacy_epistemic_files(epistemic_path: Path) -> list[Path]:
+    """Return legacy per-ID files under ``epistemic_state/E*.md``."""
     legacy_dir = infer_epistemic_dir(epistemic_path)
     if not legacy_dir.exists():
-        return 0, 0, 0
+        return []
+    return [
+        path
+        for path in sorted(legacy_dir.glob("E*.md"))
+        if path.is_file() and re.fullmatch(r"E\d{3,}\.md", path.name)
+    ]
 
-    migrated_legacy_files = 0
-    created_history_files = 0
-    appended_blocks = 0
 
-    for legacy_path in sorted(legacy_dir.glob("E*.md")):
-        if not legacy_path.is_file():
-            continue
-        entry_id = legacy_path.stem.upper()
-        if not re.fullmatch(r"E\d{3,}", entry_id):
-            continue
+def assert_no_legacy_epistemic_files(epistemic_path: Path) -> None:
+    """Fail fast when legacy per-ID files exist in the old location."""
+    legacy_files = find_legacy_epistemic_files(epistemic_path)
+    if not legacy_files:
+        return
 
-        try:
-            legacy_text = legacy_path.read_text()
-        except OSError:
-            continue
-
-        history_path = infer_history_path(epistemic_path, entry_id)
-        subject = subjects_by_id.get(entry_id, "claim")
-        if _ensure_history_heading(history_path, entry_id, subject):
-            created_history_files += 1
-
-        scoped = extract_external_history_for_entry(legacy_text, entry_id)
-        payload_source = scoped.strip() if scoped else legacy_text.strip()
-        payload_lines = payload_source.splitlines()
-        if payload_lines and re.match(r"^##\s+E\d{3,}\b", payload_lines[0].strip(), re.IGNORECASE):
-            payload_lines = payload_lines[1:]
-        while payload_lines and not payload_lines[0].strip():
-            payload_lines = payload_lines[1:]
-        payload = "\n".join(payload_lines).strip()
-
-        if _append_history_block(history_path, payload):
-            appended_blocks += 1
-
-        legacy_path.unlink(missing_ok=True)
-        migrated_legacy_files += 1
-
-    return migrated_legacy_files, created_history_files, appended_blocks
+    legacy_dir = infer_epistemic_dir(epistemic_path)
+    listed = "\n".join(f"  - {path.name}" for path in legacy_files)
+    raise ValueError(
+        "Legacy epistemic files found under the deprecated path.\n"
+        f"Move files from `{legacy_dir}/E*.md` to "
+        f"`{legacy_dir}/history/E*.md` manually, then rerun migration.\n"
+        f"Detected files:\n{listed}",
+    )
 
 
 def externalize_epistemic_history(epistemic_path: Path) -> EpistemicHistoryMigrationResult:
     """Split inline epistemic content into per-ID current/history inferred files."""
     if not epistemic_path.exists():
-        return EpistemicHistoryMigrationResult(0, 0, 0, 0, 0)
+        return EpistemicHistoryMigrationResult(0, 0, 0, 0)
+
+    assert_no_legacy_epistemic_files(epistemic_path)
 
     original = epistemic_path.read_text()
     sections = parse_sections(original)
@@ -180,7 +142,6 @@ def externalize_epistemic_history(epistemic_path: Path) -> EpistemicHistoryMigra
     created_history_files = 0
     created_current_files = 0
     appended_blocks = 0
-    migrated_legacy_files = 0
 
     # Iterate bottom-up to keep parse indices stable during line replacement.
     for sec in reversed(sections):
@@ -223,21 +184,6 @@ def externalize_epistemic_history(epistemic_path: Path) -> EpistemicHistoryMigra
         if _write_current_state(current_path, section_text):
             created_current_files += 1
 
-    subjects_by_id: dict[str, str] = {}
-    for sec in refreshed_sections:
-        entry_id = extract_id(sec["heading"])
-        if not entry_id:
-            continue
-        subjects_by_id[entry_id.upper()] = _extract_subject(sec["heading"])
-
-    legacy_migrated, legacy_created, legacy_appended = _migrate_legacy_history_files(
-        epistemic_path=epistemic_path,
-        subjects_by_id=subjects_by_id,
-    )
-    migrated_legacy_files += legacy_migrated
-    created_history_files += legacy_created
-    appended_blocks += legacy_appended
-
     updated = "\n".join(lines)
     if original.endswith("\n"):
         updated += "\n"
@@ -248,5 +194,4 @@ def externalize_epistemic_history(epistemic_path: Path) -> EpistemicHistoryMigra
         created_history_files=created_history_files,
         created_current_files=created_current_files,
         appended_blocks=appended_blocks,
-        migrated_legacy_files=migrated_legacy_files,
     )
