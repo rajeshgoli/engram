@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -212,3 +213,50 @@ class TestActiveChunkLock:
         assert r2.exit_code != 0
         assert "Active chunk lock present" in r2.output
         assert lock_path.exists()
+
+    def test_invalid_active_chunk_metadata_blocks_generation(self, runner: CliRunner, project_dir: Path) -> None:
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        lock_path = project_dir / ".engram" / "active_chunk.yaml"
+        lock_path.write_text("chunk_id: not-an-int\ncreated_at: 2026-01-01T00:00:00Z\n")
+
+        result = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
+        assert result.exit_code != 0
+        assert "Active chunk lock metadata is invalid" in result.output
+
+        generation_lock = project_dir / ".engram" / "active_chunk.lock"
+        assert not generation_lock.exists()
+
+    def test_generation_lock_is_held_during_next_chunk(self, runner: CliRunner, project_dir: Path, monkeypatch) -> None:
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        observed = {"lock_seen": False}
+
+        def fake_next_chunk(config, root, fold_from=None):  # noqa: ANN001
+            observed["lock_seen"] = (root / ".engram" / "active_chunk.lock").exists()
+            chunks_dir = root / ".engram" / "chunks"
+            chunks_dir.mkdir(parents=True, exist_ok=True)
+            return SimpleNamespace(
+                chunk_id=1,
+                chunk_type="fold",
+                living_docs_chars=0,
+                budget=1000,
+                items_count=0,
+                chunk_chars=0,
+                date_range="2026-01-01 to 2026-01-01",
+                pre_assigned_ids={},
+                input_path=chunks_dir / "chunk_001_input.md",
+                prompt_path=chunks_dir / "chunk_001_prompt.txt",
+                remaining_queue=0,
+                drift_entry_count=0,
+            )
+
+        import engram.fold.chunker as chunker_module
+
+        monkeypatch.setattr(chunker_module, "next_chunk", fake_next_chunk)
+        result = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
+        assert result.exit_code == 0
+        assert observed["lock_seen"] is True
+        assert not (project_dir / ".engram" / "active_chunk.lock").exists()
