@@ -1070,6 +1070,8 @@ class TestNextChunk:
         assert "# Instructions" in input_text
         assert "Pre-assigned IDs for this chunk" in input_text
         assert "Epistemic Per-ID File Requirement (Required)" in input_text
+        assert "Per-ID current files (" in input_text
+        assert "should be detailed and coherent" in input_text
         assert "For normal fold chunks, use ONLY this input file + the 4 living docs." in input_text
         assert "Do NOT inspect source code, git history, or filesystem state to verify claims." in input_text
         assert "[Pasted text #N +M lines]" in input_text
@@ -1083,6 +1085,7 @@ class TestNextChunk:
         assert "Do NOT inspect source code/git/filesystem for this chunk." in prompt_text
         assert "/epistemic_state/current/E*.md" in prompt_text
         assert "/epistemic_state/history/E*.md" in prompt_text
+        assert "should be detailed and coherent, not terse" in prompt_text
 
     def test_normal_chunk_creates_context_worktree_in_git_repo(self, project, config):
         subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True)
