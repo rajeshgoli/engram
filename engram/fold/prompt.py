@@ -54,6 +54,8 @@ def render_chunk_input(
     items_content: str,
     pre_assigned_ids: dict[str, list[str]],
     doc_paths: dict[str, Path],
+    context_worktree_path: Path | None = None,
+    context_commit: str | None = None,
 ) -> str:
     """Render a normal fold chunk's input.md file.
 
@@ -68,6 +70,8 @@ def render_chunk_input(
         doc_paths=_stringify_paths(doc_paths),
         **layout_vars,
         pre_assigned_ids=pre_assigned_ids,
+        context_worktree_path=str(context_worktree_path) if context_worktree_path else None,
+        context_commit=context_commit,
     )
 
     content = instructions
@@ -87,6 +91,8 @@ def render_triage_input(
     ref_commit: str | None = None,
     ref_date: str | None = None,
     project_root: Path | None = None,
+    context_worktree_path: Path | None = None,
+    context_commit: str | None = None,
 ) -> str:
     """Render a drift-triage chunk's input.md file.
 
@@ -127,6 +133,8 @@ def render_triage_input(
         ref_commit=ref_commit,
         ref_date=ref_date,
         lint_cmd=lint_cmd,
+        context_worktree_path=str(context_worktree_path) if context_worktree_path else None,
+        context_commit=context_commit,
     )
 
 
@@ -134,9 +142,12 @@ def render_agent_prompt(
     *,
     chunk_id: int,
     date_range: str,
+    chunk_type: str,
     input_path: Path,
     doc_paths: dict[str, Path],
     project_root: Path | None = None,
+    context_worktree_path: Path | None = None,
+    context_commit: str | None = None,
 ) -> str:
     """Render the chunk_NNN_prompt.txt agent execution prompt.
 
@@ -164,6 +175,37 @@ def render_agent_prompt(
         f"- Do NOT read per-ID epistemic history files under {epistemic_history_dir}/E*.md.\n"
         f"  They are append-only logs; when needed, append via Bash without opening them.\n"
     )
+    context_path_text = str(context_worktree_path.resolve()) if context_worktree_path else None
+    context_commit_short = context_commit[:12] if context_commit else None
+    triage_repo_inspection_types = {"orphan_triage", "epistemic_audit"}
+    if chunk_type in triage_repo_inspection_types and context_path_text:
+        repo_scope_constraints = (
+            "- Use this chunk's input + living docs first.\n"
+            "- Repo inspection is allowed for this triage chunk only when needed.\n"
+            f"- If inspecting repo files, use ONLY {context_path_text}"
+            + (f" (commit `{context_commit_short}`)" if context_commit_short else "")
+            + ".\n"
+            "- Do NOT inspect source files from the project-root workspace.\n"
+        )
+    elif chunk_type in triage_repo_inspection_types:
+        repo_scope_constraints = (
+            "- Use this chunk's input + living docs first.\n"
+            "- Repo inspection is allowed for this triage chunk only when needed.\n"
+            "- Follow triage input instructions for the correct repo view (e.g., temporal worktree when provided).\n"
+        )
+    elif context_path_text:
+        repo_scope_constraints = (
+            "- For standard fold/workflow_synthesis chunks, use only the input file + living docs.\n"
+            "- Do NOT inspect source code/git/filesystem for this chunk.\n"
+            f"- A context checkout exists at {context_path_text}"
+            + (f" (commit `{context_commit_short}`)" if context_commit_short else "")
+            + "; ignore it unless a future triage chunk explicitly requires repo verification.\n"
+        )
+    else:
+        repo_scope_constraints = (
+            "- For standard fold/workflow_synthesis chunks, use only the input file + living docs.\n"
+            "- Do NOT inspect source code/git/filesystem for this chunk.\n"
+        )
 
     return (
         f"You are processing a knowledge fold chunk.\n"
@@ -172,6 +214,7 @@ def render_agent_prompt(
         f"- Do NOT use the Task tool or spawn sub-agents. Do all work directly.\n"
         f"- Do NOT use Write to overwrite entire files. Use Edit for surgical updates only.\n"
         f"- Be SUCCINCT. High information density, no filler, no narrative prose.\n"
+        f"{repo_scope_constraints}"
         f"{epistemic_constraints}"
         f"\n"
         f"Read the input file at {input_path.resolve()} — it contains system instructions\n"

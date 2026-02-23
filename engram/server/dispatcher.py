@@ -20,7 +20,7 @@ from typing import Any
 
 from engram.config import resolve_doc_paths
 from engram.dispatch import invoke_agent, read_docs
-from engram.fold.chunker import ChunkResult, next_chunk
+from engram.fold.chunker import ChunkResult, cleanup_chunk_context_worktree, next_chunk
 from engram.linter import LintResult, lint_post_dispatch
 
 log = logging.getLogger(__name__)
@@ -88,12 +88,15 @@ class Dispatcher:
         self._db.update_dispatch_state(dispatch_id, "dispatched")
 
         # Execute fold agent
-        success = self._execute_and_validate(
-            dispatch_id=dispatch_id,
-            chunk=chunk,
-            before_contents=before_contents,
-            doc_paths=doc_paths,
-        )
+        try:
+            success = self._execute_and_validate(
+                dispatch_id=dispatch_id,
+                chunk=chunk,
+                before_contents=before_contents,
+                doc_paths=doc_paths,
+            )
+        finally:
+            cleanup_chunk_context_worktree(self._project_root, chunk.context_worktree_path)
 
         if success:
             self._db.update_dispatch_state(dispatch_id, "validated")

@@ -244,6 +244,11 @@ def next_chunk_cmd(project_root: str) -> None:
 
         click.echo(f"  Written: {result.input_path}")
         click.echo(f"  Prompt: {result.prompt_path}")
+        context_worktree_path = getattr(result, "context_worktree_path", None)
+        if context_worktree_path:
+            context_commit = getattr(result, "context_commit", None)
+            commit = context_commit[:12] if isinstance(context_commit, str) else "unknown"
+            click.echo(f"  Context checkout: {context_worktree_path} ({commit})")
         click.echo(f"  Remaining in queue: {result.remaining_queue}")
 
         _write_active_chunk_lock(root, result)
@@ -258,11 +263,19 @@ def next_chunk_cmd(project_root: str) -> None:
 )
 def clear_active_chunk_cmd(project_root: str) -> None:
     """Clear the active chunk lock (recovery for aborted/failed chunk processing)."""
+    import yaml
+
     root = Path(project_root)
     lock_path = _active_chunk_lock_path(root)
     generation_lock = _active_chunk_generation_lock_path(root)
     cleared: list[str] = []
     if lock_path.exists():
+        try:
+            lock = yaml.safe_load(lock_path.read_text())
+        except (OSError, yaml.YAMLError):
+            lock = None
+        if isinstance(lock, dict):
+            _cleanup_chunk_context_from_lock(root, lock)
         lock_path.unlink()
         cleared.append(str(lock_path))
     if generation_lock.exists():
@@ -434,6 +447,7 @@ def _enforce_single_active_chunk(project_root: Path) -> None:
                 continue
 
         if re.search(rf"Knowledge fold: chunk(?:_| )0*{chunk_id}\b", subjects):
+            _cleanup_chunk_context_from_lock(project_root, lock)
             lock_path.unlink()
             return
 
@@ -459,9 +473,24 @@ def _write_active_chunk_lock(project_root: Path, result: object) -> None:
         "chunk_type": getattr(result, "chunk_type", None),
         "input_path": str(getattr(result, "input_path", "")),
         "prompt_path": str(getattr(result, "prompt_path", "")),
+        "context_worktree_path": (
+            str(getattr(result, "context_worktree_path"))
+            if getattr(result, "context_worktree_path", None)
+            else None
+        ),
+        "context_commit": getattr(result, "context_commit", None),
         "created_at": datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     lock_path.write_text(yaml.safe_dump(payload, sort_keys=True))
+
+
+def _cleanup_chunk_context_from_lock(project_root: Path, lock: dict) -> None:
+    from engram.fold.chunker import cleanup_chunk_context_worktree
+
+    raw = lock.get("context_worktree_path")
+    if not isinstance(raw, str) or not raw.strip():
+        return
+    cleanup_chunk_context_worktree(project_root, Path(raw))
 
 
 @cli.command()

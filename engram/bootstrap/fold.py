@@ -19,7 +19,7 @@ from typing import Any
 
 from engram.config import load_config, resolve_doc_paths
 from engram.dispatch import invoke_agent, read_docs
-from engram.fold.chunker import ChunkResult, next_chunk
+from engram.fold.chunker import ChunkResult, cleanup_chunk_context_worktree, next_chunk
 from engram.fold.queue import build_queue
 from engram.linter import lint_post_dispatch
 from engram.server.briefing import regenerate_l0_briefing
@@ -172,7 +172,10 @@ def forward_fold(
             chunk.date_range or "drift triage",
         )
 
-        success = _dispatch_and_validate(config, project_root, chunk)
+        try:
+            success = _dispatch_and_validate(config, project_root, chunk)
+        finally:
+            cleanup_chunk_context_worktree(project_root, chunk.context_worktree_path)
         if success:
             log.info("Chunk %d committed", chunk.chunk_id)
         else:

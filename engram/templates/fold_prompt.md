@@ -112,10 +112,18 @@ Graveyard files are append-only. Never edit existing graveyard entries.
 - Use Edit for surgical updates. Do NOT reproduce entire documents.
 - Only edit sections affected by new content.
 - Capture cross-concept relationships using stable IDs (C###, E###, W###).
+{% if context_worktree_path %}
+- For normal fold chunks, use ONLY this input file + the 4 living docs.
+- Do NOT inspect source code, git history, or filesystem state to verify claims.
+- A chunk context checkout exists at `{{ context_worktree_path }}`{% if context_commit %} (commit `{{ context_commit[:12] }}`){% endif %} for future triage-only verification.
+{% else %}
+- For normal fold chunks, use ONLY this input file + the 4 living docs.
+- Do NOT inspect source code, git history, or filesystem state to verify claims.
+{% endif %}
 - Architect review comments on merged PRs = debt.
 - When two artifacts make contradictory claims, that's an epistemic entry.
 - For each touched E{NNN}, keep exactly one coherent current position (no contradictory parallel states).
 - Do NOT add entries about the fold process itself.
-- When a concept's source files are deleted, mark it DEAD.
+- If this input explicitly states a concept's source files were deleted, mark it DEAD.
 - When an ORPHANED CONCEPTS section is present, triage each one.
-- Treat repo paths as case-sensitive. Do not copy paths from issues/comments into living docs unless you are confident the casing matches the repo. If unsure, omit the path or use the repo-canonical casing already used elsewhere.
+- If content is ambiguous or contradictory and cannot be resolved from this input, record/maintain the uncertainty in epistemic state (e.g., contested) rather than self-verifying from repo code.

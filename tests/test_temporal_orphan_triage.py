@@ -384,6 +384,8 @@ class TestTriagePromptTemporalContext:
             doc_paths=doc_paths,
         )
         assert "Temporal Context" not in output
+        assert "Special-case scope:" in output
+        assert "Repo inspection is allowed for triage in this workspace" in output
 
     def test_temporal_block_with_ref_commit(self, tmp_path: Path) -> None:
         from engram.fold.prompt import render_triage_input
@@ -406,6 +408,30 @@ class TestTriagePromptTemporalContext:
         assert "2026-01-01" in output
         assert "abc123def456" in output
         assert "git worktree add" in output
+
+    def test_temporal_block_uses_provided_context_worktree(self, tmp_path: Path) -> None:
+        from engram.fold.prompt import render_triage_input
+        from engram.fold.chunker import DriftReport
+
+        drift = DriftReport(
+            orphaned_concepts=[{"name": "C001: Widget", "id": "C001", "paths": ["src/w.py"]}],
+        )
+        doc_paths = _fake_doc_paths(tmp_path)
+
+        output = render_triage_input(
+            drift_type="orphan_triage",
+            drift_report=drift,
+            chunk_id=1,
+            doc_paths=doc_paths,
+            ref_commit="abc123def456789012345678901234567890abcd",
+            ref_date="2026-01-01",
+            context_worktree_path=Path("/tmp/engram-chunk-001-abc123de-demo"),
+            context_commit="abc123def456789012345678901234567890abcd",
+        )
+        assert "Chunk Context Checkout" in output
+        assert "/tmp/engram-chunk-001-abc123de-demo" in output
+        assert "git worktree add" not in output
+        assert "Repo inspection is allowed for triage, but only in the chunk context checkout." in output
 
     def test_temporal_block_not_in_contested_review(self, tmp_path: Path) -> None:
         """Temporal context does not appear in contested review."""
@@ -454,6 +480,7 @@ class TestTriagePromptTemporalContext:
             ref_date="2026-01-01",
         )
         assert "Temporal Context" in output
+        assert "Special-case scope:" in output
         assert "2026-01-01" in output
         assert "abc123def456" in output
         assert "git worktree add /tmp/engram-epistemic-abc123de" in output

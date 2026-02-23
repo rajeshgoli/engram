@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -257,6 +258,76 @@ class TestActiveChunkLock:
 
         generation_lock = project_dir / ".engram" / "active_chunk.lock"
         assert not generation_lock.exists()
+
+    def test_clear_active_chunk_removes_context_worktree(self, runner: CliRunner, project_dir: Path) -> None:
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        context_dir = Path(tempfile.mkdtemp(prefix="engram-chunk-001-abcdef12-"))
+        (context_dir / "marker.txt").write_text("x")
+
+        lock_path = project_dir / ".engram" / "active_chunk.yaml"
+        lock_path.write_text(
+            yaml.safe_dump(
+                {
+                    "chunk_id": 1,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "context_worktree_path": str(context_dir),
+                },
+                sort_keys=True,
+            ),
+        )
+
+        result = runner.invoke(cli, ["clear-active-chunk", "--project-root", str(project_dir)])
+        assert result.exit_code == 0
+        assert not lock_path.exists()
+        assert not context_dir.exists()
+
+    def test_clear_active_chunk_does_not_remove_non_engram_temp_paths(self, runner: CliRunner, project_dir: Path) -> None:
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        unrelated = Path(tempfile.mkdtemp(prefix="unrelated-temp-dir-"))
+        (unrelated / "marker.txt").write_text("x")
+
+        lock_path = project_dir / ".engram" / "active_chunk.yaml"
+        lock_path.write_text(
+            yaml.safe_dump(
+                {
+                    "chunk_id": 1,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "context_worktree_path": str(unrelated),
+                },
+                sort_keys=True,
+            ),
+        )
+
+        result = runner.invoke(cli, ["clear-active-chunk", "--project-root", str(project_dir)])
+        assert result.exit_code == 0
+        assert unrelated.exists()
+
+    def test_clear_active_chunk_removes_context_worktree_for_chunk_id_1000(self, runner: CliRunner, project_dir: Path) -> None:
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        context_dir = Path(tempfile.mkdtemp(prefix="engram-chunk-1000-abcdef12-"))
+        (context_dir / "marker.txt").write_text("x")
+
+        lock_path = project_dir / ".engram" / "active_chunk.yaml"
+        lock_path.write_text(
+            yaml.safe_dump(
+                {
+                    "chunk_id": 1000,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "context_worktree_path": str(context_dir),
+                },
+                sort_keys=True,
+            ),
+        )
+
+        result = runner.invoke(cli, ["clear-active-chunk", "--project-root", str(project_dir)])
+        assert result.exit_code == 0
+        assert not context_dir.exists()
 
     def test_generation_lock_is_held_during_next_chunk(self, runner: CliRunner, project_dir: Path, monkeypatch) -> None:
         init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])

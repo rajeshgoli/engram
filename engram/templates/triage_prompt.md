@@ -12,6 +12,15 @@ Graveyard files (append-only):
 - {{ doc_paths.concept_graveyard }}
 - {{ doc_paths.epistemic_graveyard }}
 
+{% if context_worktree_path %}
+## Chunk Context Checkout
+
+If you inspect repo files for this chunk, use ONLY:
+- `{{ context_worktree_path }}`{% if context_commit %} (commit `{{ context_commit[:12] }}`){% endif %}
+
+Do NOT inspect source files from the project-root workspace.
+{% endif %}
+
 ---
 
 {% if drift_type == "orphan_triage" %}
@@ -47,7 +56,9 @@ is never a valid reason to skip triage. For each one:
 
 Living docs are current through **{{ ref_date }}** (commit `{{ ref_commit[:12] }}`).
 Check file existence at that commit, NOT today's filesystem.
-
+{% if context_worktree_path %}
+Use the chunk context checkout above for verification.
+{% else %}
 To inspect files at the reference point:
 ```
 git worktree add /tmp/engram-triage-{{ ref_commit[:8] }} {{ ref_commit }}
@@ -57,6 +68,7 @@ Check paths in that worktree. When done:
 ```
 git worktree remove /tmp/engram-triage-{{ ref_commit[:8] }}
 ```
+{% endif %}
 
 If a file exists at that commit but is missing today, it was renamed/moved AFTER
 the date living docs know about — leave it ACTIVE. The fold will process the
@@ -76,7 +88,9 @@ and have not been referenced by recent queue items.
 
 Living docs are current through **{{ ref_date }}** (commit `{{ ref_commit[:12] }}`).
 Validate each belief against code/docs at that commit, NOT today's workspace state.
-
+{% if context_worktree_path %}
+Use the chunk context checkout above to verify whether claims were valid as of the fold context.
+{% else %}
 To inspect the project at that reference point:
 ```
 git worktree add /tmp/engram-epistemic-{{ ref_commit[:8] }} {{ ref_commit }}
@@ -87,6 +101,7 @@ When done:
 ```
 git worktree remove /tmp/engram-epistemic-{{ ref_commit[:8] }}
 ```
+{% endif %}
 {% endif %}
 
 For each entry below:
@@ -158,6 +173,19 @@ For each cluster of related workflows:
 {% endfor %}
 
 ({{ entry_count }} workflow entries to review for synthesis)
+
+Input-only mode for this chunk:
+- Use ONLY this input file + the listed living docs.
+- Do NOT inspect source code, git history, or filesystem state.
+{% endif %}
+
+{% if drift_type == "orphan_triage" or drift_type == "epistemic_audit" %}
+Special-case scope:
+{% if context_worktree_path %}
+- Repo inspection is allowed for triage, but only in the chunk context checkout.
+{% else %}
+- Repo inspection is allowed for triage in this workspace (no context checkout available).
+{% endif %}
 {% endif %}
 
 ---
