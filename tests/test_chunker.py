@@ -1069,6 +1069,7 @@ class TestNextChunk:
         input_text = result.input_path.read_text()
         assert "# Instructions" in input_text
         assert "Pre-assigned IDs for this chunk" in input_text
+        assert "Epistemic Per-ID File Requirement (Required)" in input_text
         assert "For normal fold chunks, use ONLY this input file + the 4 living docs." in input_text
         assert "Do NOT inspect source code, git history, or filesystem state to verify claims." in input_text
         assert "[Pasted text #N +M lines]" in input_text
@@ -1158,6 +1159,9 @@ class TestNextChunk:
         assert result.pre_assigned_ids["C"] == ["C108"]
         assert result.pre_assigned_ids["E"] == ["E102"]
         assert result.pre_assigned_ids["W"] == ["W002"]
+        input_text = result.input_path.read_text()
+        assert "/epistemic_state/current/E102.md" in input_text
+        assert "/epistemic_state/history/E102.md" in input_text
 
     def test_fold_chunk_does_not_include_orphan_triage_section(self, project, config):
         registry = project / "docs" / "decisions" / "concept_registry.md"

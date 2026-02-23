@@ -302,6 +302,24 @@ def validate_epistemic_state(content: str, epistemic_path: Path | None = None) -
                 continue
 
             preferred_history = history_paths[0] if history_paths else None
+            remediation = ""
+            if current_path and preferred_history:
+                remediation = (
+                    " Remediation: create/update both files with matching heading "
+                    f"for {entry_id} and support content (Evidence/History): "
+                    f"current={current_path}, history={preferred_history}"
+                )
+            elif preferred_history:
+                remediation = (
+                    " Remediation: create/update inferred history file with matching "
+                    f"heading for {entry_id} and support content: {preferred_history}"
+                )
+            elif current_path:
+                remediation = (
+                    " Remediation: create/update inferred current-state file with matching "
+                    f"heading for {entry_id} and support content: {current_path}"
+                )
+
             if not external_file_seen:
                 if preferred_history and current_path:
                     missing_msg = (
@@ -335,7 +353,7 @@ def validate_epistemic_state(content: str, epistemic_path: Path | None = None) -
                         "Missing inline 'Evidence:'/'History:' and inferred epistemic files "
                         "lack support content"
                     )
-            violations.append(Violation("epistemic", entry_id, missing_msg))
+            violations.append(Violation("epistemic", entry_id, missing_msg + remediation))
             continue
 
         history_source_text = "\n".join(history_sources)

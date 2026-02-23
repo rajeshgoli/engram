@@ -339,6 +339,9 @@ Just a statement with no evidence chain.
         violations = validate_epistemic_state(doc, epistemic_path=epistemic_path)
         assert len(violations) == 1
         assert "inferred epistemic files not found" in violations[0].message
+        assert "Remediation:" in violations[0].message
+        assert "current=" in violations[0].message
+        assert "history=" in violations[0].message
 
     def test_inferred_history_file_must_match_entry_id(self, tmp_path: Path) -> None:
         doc = """\

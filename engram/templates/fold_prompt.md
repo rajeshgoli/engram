@@ -107,6 +107,22 @@ Graveyard files are append-only. Never edit existing graveyard entries.
   - Append-only history log (append only): `{{ epistemic_history_dir }}/E{NNN}.md`
 - Keep `{{ doc_paths.epistemic }}` concise. Put detailed, coherent per-claim state in the current file.
 
+## Epistemic Per-ID File Requirement (Required)
+
+If you create any new epistemic entry `E{NNN}` in this chunk:
+1. Create/update `{{ epistemic_current_dir }}/E{NNN}.md` with the matching `## E{NNN}: ...` heading.
+2. Create/update `{{ epistemic_history_dir }}/E{NNN}.md` with the matching heading and at least one support bullet (prefer `Evidence@<commit> ...`).
+3. Keep support content in either inline `Evidence:`/`History:` or inferred per-ID files (lint enforces this).
+
+{% set preassigned_e = pre_assigned_ids.get("E", []) %}
+{% if preassigned_e %}
+Pre-assigned epistemic IDs for this chunk (prepare files if used):
+{% for eid in preassigned_e %}
+- `{{ epistemic_current_dir }}/{{ eid }}.md`
+- `{{ epistemic_history_dir }}/{{ eid }}.md`
+{% endfor %}
+{% endif %}
+
 ## Important
 
 - Use Edit for surgical updates. Do NOT reproduce entire documents.
