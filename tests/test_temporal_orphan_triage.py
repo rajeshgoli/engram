@@ -384,6 +384,8 @@ class TestTriagePromptTemporalContext:
             doc_paths=doc_paths,
         )
         assert "Temporal Context" not in output
+        assert "Special-case scope:" in output
+        assert "Repo inspection is allowed only when explicitly instructed in the reference-context block." in output
 
     def test_temporal_block_with_ref_commit(self, tmp_path: Path) -> None:
         from engram.fold.prompt import render_triage_input
@@ -454,6 +456,7 @@ class TestTriagePromptTemporalContext:
             ref_date="2026-01-01",
         )
         assert "Temporal Context" in output
+        assert "Special-case scope:" in output
         assert "2026-01-01" in output
         assert "abc123def456" in output
         assert "git worktree add /tmp/engram-epistemic-abc123de" in output

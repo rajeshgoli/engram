@@ -172,6 +172,8 @@ def render_agent_prompt(
         f"- Do NOT use the Task tool or spawn sub-agents. Do all work directly.\n"
         f"- Do NOT use Write to overwrite entire files. Use Edit for surgical updates only.\n"
         f"- Be SUCCINCT. High information density, no filler, no narrative prose.\n"
+        f"- For standard fold/workflow_synthesis chunks, use only the input file + living docs.\n"
+        f"- Do NOT inspect source code/git/filesystem unless the input explicitly requires special triage verification.\n"
         f"{epistemic_constraints}"
         f"\n"
         f"Read the input file at {input_path.resolve()} — it contains system instructions\n"

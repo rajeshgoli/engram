@@ -158,6 +158,16 @@ For each cluster of related workflows:
 {% endfor %}
 
 ({{ entry_count }} workflow entries to review for synthesis)
+
+Input-only mode for this chunk:
+- Use ONLY this input file + the listed living docs.
+- Do NOT inspect source code, git history, or filesystem state.
+{% endif %}
+
+{% if drift_type == "orphan_triage" or drift_type == "epistemic_audit" %}
+Special-case scope:
+- Repo inspection is allowed only when explicitly instructed in the reference-context block.
+- Outside that scope, stay input-only + living-doc focused.
 {% endif %}
 
 ---

@@ -1067,6 +1067,8 @@ class TestNextChunk:
         input_text = result.input_path.read_text()
         assert "# Instructions" in input_text
         assert "Pre-assigned IDs for this chunk" in input_text
+        assert "For normal fold chunks, use ONLY this input file + the 4 living docs." in input_text
+        assert "Do NOT inspect source code, git history, or filesystem state to verify claims." in input_text
         assert "[Pasted text #N +M lines]" in input_text
         assert "Content for the chunk." in input_text
 
@@ -1074,6 +1076,8 @@ class TestNextChunk:
         prompt_text = result.prompt_path.read_text()
         assert "knowledge fold chunk" in prompt_text
         assert "Pre-assigned IDs for this chunk" in prompt_text
+        assert "For standard fold/workflow_synthesis chunks, use only the input file + living docs." in prompt_text
+        assert "Do NOT inspect source code/git/filesystem unless the input explicitly requires special triage verification." in prompt_text
         assert "/epistemic_state/current/E*.md" in prompt_text
         assert "/epistemic_state/history/E*.md" in prompt_text
 
@@ -1201,8 +1205,11 @@ class TestNextChunk:
         r1 = next_chunk(config, project)
         assert r1.chunk_type == "workflow_synthesis"
         assert r1.drift_entry_count == 4
-        assert "W001" in r1.input_path.read_text()
-        assert ")\n- **W002" in r1.input_path.read_text()
+        workflow_text = r1.input_path.read_text()
+        assert "W001" in workflow_text
+        assert ")\n- **W002" in workflow_text
+        assert "Input-only mode for this chunk:" in workflow_text
+        assert "Do NOT inspect source code, git history, or filesystem state." in workflow_text
 
         # Second call: unchanged registry triggers cooldown suppression, so we proceed with a normal fold chunk.
         r2 = next_chunk(config, project)
