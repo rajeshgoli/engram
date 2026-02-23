@@ -191,7 +191,7 @@ def render_agent_prompt(
         repo_scope_constraints = (
             "- Use this chunk's input + living docs first.\n"
             "- Repo inspection is allowed for this triage chunk only when needed.\n"
-            "- If no chunk context checkout is provided, inspect only this workspace.\n"
+            "- Follow triage input instructions for the correct repo view (e.g., temporal worktree when provided).\n"
         )
     elif context_path_text:
         repo_scope_constraints = (

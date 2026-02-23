@@ -79,7 +79,7 @@ _QUEUE_TEXT_CACHE: OrderedDict[tuple[str, str, int, int], str] = OrderedDict()
 # Evidence bullets in external epistemic history files.
 _EVIDENCE_COMMIT_RE = re.compile(r"Evidence@([0-9a-fA-F]{7,40})")
 _EVIDENCE_COMMIT_DATE_CACHE: dict[tuple[str, str], datetime | None] = {}
-_CHUNK_WORKTREE_NAME_RE = re.compile(r"^engram-chunk-\d{3}-[0-9a-f]{8}-[A-Za-z0-9._-]+$")
+_CHUNK_WORKTREE_NAME_RE = re.compile(r"^engram-chunk-\d{3,}-[0-9a-f]{8}-[A-Za-z0-9._-]+$")
 
 
 @dataclass

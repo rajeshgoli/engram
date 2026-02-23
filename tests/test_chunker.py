@@ -1199,6 +1199,8 @@ class TestNextChunk:
         input_text = result.input_path.read_text()
         assert "Orphan Triage Round" in input_text
         assert "orphan_0" in input_text
+        prompt_text = result.prompt_path.read_text()
+        assert "Follow triage input instructions for the correct repo view" in prompt_text
 
     def test_epistemic_audit_chunk(self, project, config):
         epistemic = project / "docs" / "decisions" / "epistemic_state.md"
