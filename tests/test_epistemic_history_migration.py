@@ -167,3 +167,31 @@ def test_migrates_legacy_epistemic_files_into_split_history(tmp_path: Path) -> N
     content = history_file.read_text()
     assert "## E040:" in content
     assert "2026-01-07: imported from legacy file" in content
+
+
+def test_migrates_legacy_file_without_matching_epistemic_section(tmp_path: Path) -> None:
+    epistemic = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+    epistemic.parent.mkdir(parents=True, exist_ok=True)
+    epistemic.write_text("# Epistemic State\n\n")
+
+    legacy_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E050.md"
+    legacy_file.parent.mkdir(parents=True, exist_ok=True)
+    legacy_file.write_text(
+        "# Epistemic History\n\n"
+        "## E050: orphan legacy claim\n\n"
+        "- 2026-01-08: carried from legacy-only file\n",
+    )
+
+    result = externalize_epistemic_history(epistemic)
+    assert result.migrated_entries == 0
+    assert result.created_current_files == 0
+    assert result.migrated_legacy_files == 1
+    assert result.created_history_files == 1
+    assert result.appended_blocks == 1
+    assert not legacy_file.exists()
+
+    history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E050.em"
+    assert history_file.exists()
+    content = history_file.read_text()
+    assert "## E050: claim" in content
+    assert "2026-01-08: carried from legacy-only file" in content
