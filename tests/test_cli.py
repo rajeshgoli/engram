@@ -125,6 +125,7 @@ class TestMigrateEpistemicHistory:
         assert "Epistemic history migration complete." in result.output
         assert "Created current files:" in result.output
         assert "Created history files:" in result.output
+        assert "Migrated legacy files:" in result.output
         assert "Lint: PASS" in result.output
 
         updated = epistemic.read_text()

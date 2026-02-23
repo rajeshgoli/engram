@@ -1077,7 +1077,7 @@ class TestNextChunk:
         assert "/epistemic_state/current/E*.em" in prompt_text
         assert "/epistemic_state/history/E*.em" in prompt_text
 
-    def test_prompt_uses_legacy_epistemic_paths_when_legacy_files_present(self, project, config):
+    def test_prompt_uses_split_epistemic_paths_when_legacy_files_present(self, project, config):
         legacy = project / "docs" / "decisions" / "epistemic_state" / "E005.md"
         legacy.parent.mkdir(parents=True, exist_ok=True)
         legacy.write_text("## E005: legacy history\n")
@@ -1089,8 +1089,9 @@ class TestNextChunk:
 
         result = next_chunk(config, project)
         prompt_text = result.prompt_path.read_text()
-        assert "/epistemic_state/E*.md" in prompt_text
-        assert "/epistemic_state/current/E*.em" not in prompt_text
+        assert "/epistemic_state/current/E*.em" in prompt_text
+        assert "/epistemic_state/history/E*.em" in prompt_text
+        assert "/epistemic_state/E*.md" not in prompt_text
 
     def test_pre_assigned_ids_do_not_collide_with_existing_doc_ids(self, project, config):
         # Seed living docs with high existing IDs (simulates fresh allocator DB behind docs)

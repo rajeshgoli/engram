@@ -24,6 +24,7 @@ def test_externalizes_inline_history_into_inferred_file(tmp_path: Path) -> None:
     assert result.created_history_files == 1
     assert result.created_current_files == 1
     assert result.appended_blocks == 1
+    assert result.migrated_legacy_files == 0
 
     updated = epistemic.read_text()
     assert "**History:**" not in updated
@@ -56,6 +57,7 @@ def test_migration_is_noop_when_no_inline_history(tmp_path: Path) -> None:
     assert result.created_history_files == 0
     assert result.created_current_files == 1
     assert result.appended_blocks == 0
+    assert result.migrated_legacy_files == 0
     assert epistemic.read_text() == before
     current_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "current" / "E010.em"
     assert current_file.exists()
@@ -133,3 +135,35 @@ def test_migration_rerun_preserves_existing_current_file(tmp_path: Path) -> None
     second = externalize_epistemic_history(epistemic)
     assert second.created_current_files == 0
     assert "user-updated current file" in current_file.read_text()
+
+
+def test_migrates_legacy_epistemic_files_into_split_history(tmp_path: Path) -> None:
+    epistemic = tmp_path / "docs" / "decisions" / "epistemic_state.md"
+    epistemic.parent.mkdir(parents=True, exist_ok=True)
+    epistemic.write_text(
+        "# Epistemic State\n\n"
+        "## E040: legacy migration claim (believed)\n"
+        "**Current position:** from main file.\n"
+        "**Agent guidance:** monitor.\n",
+    )
+
+    legacy_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E040.md"
+    legacy_file.parent.mkdir(parents=True, exist_ok=True)
+    legacy_file.write_text(
+        "# Epistemic History\n\n"
+        "## E040: legacy migration claim\n\n"
+        "- 2026-01-07: imported from legacy file\n",
+    )
+
+    result = externalize_epistemic_history(epistemic)
+    assert result.migrated_legacy_files == 1
+    assert result.created_history_files == 1
+    assert result.created_current_files == 1
+    assert result.appended_blocks == 1
+    assert not legacy_file.exists()
+
+    history_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E040.em"
+    assert history_file.exists()
+    content = history_file.read_text()
+    assert "## E040:" in content
+    assert "2026-01-07: imported from legacy file" in content

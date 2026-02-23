@@ -9,7 +9,6 @@ from engram.epistemic_history import (
     infer_current_path,
     infer_history_candidates,
     infer_history_path,
-    infer_legacy_history_path,
 )
 
 
@@ -27,7 +26,6 @@ def test_history_candidates_include_legacy_fallback(tmp_path: Path) -> None:
     epistemic = tmp_path / "docs" / "decisions" / "epistemic_state.md"
     assert infer_history_candidates(epistemic, "E123") == [
         tmp_path / "docs" / "decisions" / "epistemic_state" / "history" / "E123.em",
-        infer_legacy_history_path(epistemic, "E123"),
     ]
 
 
@@ -41,16 +39,18 @@ def test_detect_layout_defaults_to_split(tmp_path: Path) -> None:
     )
 
 
-def test_detect_layout_uses_legacy_when_legacy_files_exist(tmp_path: Path) -> None:
+def test_detect_layout_stays_split_even_when_legacy_files_exist(tmp_path: Path) -> None:
     epistemic = tmp_path / "docs" / "decisions" / "epistemic_state.md"
     legacy_file = tmp_path / "docs" / "decisions" / "epistemic_state" / "E005.md"
     legacy_file.parent.mkdir(parents=True, exist_ok=True)
     legacy_file.write_text("## E005: legacy\n")
 
     layout = detect_epistemic_layout(epistemic)
-    assert layout.mode == "legacy"
-    assert layout.current_dir is None
-    assert layout.file_glob == "E*.md"
+    assert layout.mode == "split"
+    assert layout.current_dir == (
+        tmp_path / "docs" / "decisions" / "epistemic_state" / "current"
+    )
+    assert layout.file_glob == "E*.em"
     assert layout.history_dir == (
-        tmp_path / "docs" / "decisions" / "epistemic_state"
+        tmp_path / "docs" / "decisions" / "epistemic_state" / "history"
     )

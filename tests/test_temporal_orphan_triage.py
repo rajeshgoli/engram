@@ -462,7 +462,7 @@ class TestTriagePromptTemporalContext:
         assert "/epistemic_state/history/E{NNN}.em" in output
         assert "/epistemic_state/current/E{NNN}.em" in output
 
-    def test_epistemic_audit_uses_legacy_paths_when_legacy_files_exist(self, tmp_path: Path) -> None:
+    def test_epistemic_audit_uses_split_paths_even_when_legacy_files_exist(self, tmp_path: Path) -> None:
         from engram.fold.prompt import render_triage_input
         from engram.fold.chunker import DriftReport
 
@@ -487,9 +487,9 @@ class TestTriagePromptTemporalContext:
             ref_commit="abc123def456789012345678901234567890abcd",
             ref_date="2026-01-01",
         )
-        assert "/epistemic_state/E{NNN}.md" in output
-        assert "/epistemic_state/history/E{NNN}.em" not in output
-        assert "/epistemic_state/current/E{NNN}.em" not in output
+        assert "/epistemic_state/history/E{NNN}.em" in output
+        assert "/epistemic_state/current/E{NNN}.em" in output
+        assert "/epistemic_state/E{NNN}.md" not in output
 
 
 # ==================================================================

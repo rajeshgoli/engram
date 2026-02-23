@@ -24,7 +24,7 @@ from engram.epistemic_history import (
     extract_external_history_for_entry,
     extract_inline_history_lines,
     infer_current_path,
-    infer_history_candidates,
+    infer_history_path,
 )
 from engram.fold.ids import IDAllocator, estimate_new_entities
 from engram.fold.prompt import render_agent_prompt, render_chunk_input, render_triage_input
@@ -358,9 +358,10 @@ def _extract_latest_external_history_date(
         return None
 
     external_sources: list[str] = []
-    candidate_paths = [infer_current_path(epistemic_path, entry_id)] + infer_history_candidates(
-        epistemic_path, entry_id,
-    )
+    candidate_paths = [
+        infer_current_path(epistemic_path, entry_id),
+        infer_history_path(epistemic_path, entry_id),
+    ]
     seen_paths: set[str] = set()
     for path in candidate_paths:
         key = str(path)
