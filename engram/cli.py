@@ -284,11 +284,35 @@ def _active_chunk_generation_lock_path(project_root: Path) -> Path:
     return project_root / ".engram" / "active_chunk.lock"
 
 
+def _ensure_engram_lock_gitignore(project_root: Path) -> None:
+    """Ensure transient chunk-lock files are ignored by git."""
+    gitignore = project_root / ".engram" / ".gitignore"
+    gitignore.parent.mkdir(parents=True, exist_ok=True)
+
+    required = ["active_chunk.yaml", "active_chunk.lock"]
+    if gitignore.exists():
+        existing = {line.strip() for line in gitignore.read_text().splitlines()}
+    else:
+        existing = set()
+
+    missing = [entry for entry in required if entry not in existing]
+    if not missing:
+        return
+
+    with open(gitignore, "a") as fh:
+        if gitignore.exists() and gitignore.stat().st_size > 0:
+            fh.write("\n")
+        fh.write("# Transient engram chunk locks\n")
+        for entry in missing:
+            fh.write(f"{entry}\n")
+
+
 @contextmanager
 def _acquire_chunk_generation_lock(project_root: Path):
     """Acquire per-project generation mutex to prevent concurrent next-chunk races."""
     import os
 
+    _ensure_engram_lock_gitignore(project_root)
     lock_path = _active_chunk_generation_lock_path(project_root)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY

@@ -272,6 +272,34 @@ class TestActiveChunkLock:
         assert observed["lock_seen"] is True
         assert not (project_dir / ".engram" / "active_chunk.lock").exists()
 
+    def test_next_chunk_ensures_lock_files_are_gitignored(self, runner: CliRunner, project_dir: Path) -> None:
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        queue_file = project_dir / ".engram" / "queue.jsonl"
+        queue_file.write_text(
+            json.dumps(
+                {
+                    "date": "2026-01-01T00:00:00",
+                    "type": "doc",
+                    "path": "docs/working/a.md",
+                    "chars": 100,
+                    "pass": "initial",
+                },
+            ) + "\n",
+        )
+        doc = project_dir / "docs" / "working" / "a.md"
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text("# A\n")
+
+        result = runner.invoke(cli, ["next-chunk", "--project-root", str(project_dir)])
+        assert result.exit_code == 0
+
+        gitignore = project_dir / ".engram" / ".gitignore"
+        text = gitignore.read_text()
+        assert "active_chunk.yaml" in text
+        assert "active_chunk.lock" in text
+
     def test_auto_clear_includes_same_second_commit_timestamp(self, project_dir: Path, monkeypatch) -> None:
         from datetime import datetime, timezone
         import subprocess
