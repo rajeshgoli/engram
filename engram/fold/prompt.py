@@ -47,6 +47,14 @@ def _epistemic_layout_template_vars(doc_paths: dict[str, Path]) -> dict[str, str
     }
 
 
+def _concept_workflow_layout_template_vars(doc_paths: dict[str, Path]) -> dict[str, str]:
+    """Resolve mutable per-ID file directories for concepts and workflows."""
+    return {
+        "concept_current_dir": str(doc_paths["concepts"].with_suffix("") / "current"),
+        "workflow_current_dir": str(doc_paths["workflows"].with_suffix("") / "current"),
+    }
+
+
 def render_chunk_input(
     *,
     chunk_id: int,
@@ -64,7 +72,10 @@ def render_chunk_input(
     """
     env = _get_env()
     template = env.get_template("fold_prompt.md")
-    layout_vars = _epistemic_layout_template_vars(doc_paths)
+    layout_vars = {
+        **_epistemic_layout_template_vars(doc_paths),
+        **_concept_workflow_layout_template_vars(doc_paths),
+    }
 
     instructions = template.render(
         doc_paths=_stringify_paths(doc_paths),
@@ -146,6 +157,7 @@ def render_agent_prompt(
     input_path: Path,
     doc_paths: dict[str, Path],
     project_root: Path | None = None,
+    pre_assigned_ids: dict[str, list[str]] | None = None,
     context_worktree_path: Path | None = None,
     context_commit: str | None = None,
 ) -> str:
@@ -167,7 +179,10 @@ def render_agent_prompt(
         if project_root
         else "engram lint --project-root <project_root>"
     )
-    layout_vars = _epistemic_layout_template_vars(doc_paths)
+    layout_vars = {
+        **_epistemic_layout_template_vars(doc_paths),
+        **_concept_workflow_layout_template_vars(doc_paths),
+    }
     epistemic_history_dir = layout_vars["epistemic_history_dir"]
     epistemic_current_dir = layout_vars["epistemic_current_dir"]
     epistemic_constraints = (
@@ -175,6 +190,21 @@ def render_agent_prompt(
         f"- Do NOT read per-ID epistemic history files under {epistemic_history_dir}/E*.md.\n"
         f"  They are append-only logs; when needed, append via Bash without opening them.\n"
     )
+    touched_cw_entries = (
+        len(pre_assigned_ids.get("C", [])) + len(pre_assigned_ids.get("W", []))
+        if pre_assigned_ids
+        else 0
+    )
+    concept_workflow_constraints = (
+        "- Concept/workflow current-state files are available for detailed updates: "
+        f"{layout_vars['concept_current_dir']}/C*.md and "
+        f"{layout_vars['workflow_current_dir']}/W*.md.\n"
+    )
+    if touched_cw_entries and touched_cw_entries <= 5:
+        concept_workflow_constraints += (
+            "  - For small chunks, keep living doc C*/W* entries concise\n"
+            "    and keep detailed rationale in per-ID current files.\n"
+        )
     context_path_text = str(context_worktree_path.resolve()) if context_worktree_path else None
     context_commit_short = context_commit[:12] if context_commit else None
     triage_repo_inspection_types = {"orphan_triage", "epistemic_audit"}
@@ -217,6 +247,7 @@ def render_agent_prompt(
         f"- Exception: per-ID epistemic current files ({epistemic_current_dir}/E*.md) should be detailed and coherent, not terse.\n"
         f"{repo_scope_constraints}"
         f"{epistemic_constraints}"
+        f"{concept_workflow_constraints}"
         f"\n"
         f"Read the input file at {input_path.resolve()} — it contains system instructions\n"
         f"and new content covering {date_range}.\n"

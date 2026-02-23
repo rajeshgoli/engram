@@ -107,6 +107,10 @@ Graveyard files are append-only. Never edit existing graveyard entries.
   - Append-only history log (append only): `{{ epistemic_history_dir }}/E{NNN}.md`
 - Keep `{{ doc_paths.epistemic }}` concise. Put detailed, coherent per-claim state in the current file.
 - Per-ID current files (`{{ epistemic_current_dir }}/E{NNN}.md`) should be detailed and coherent (full claim state, rationale, caveats, and actionable guidance). Do NOT force brevity there.
+- For concepts/workflows, keep mutable full-state details in:
+  - `{{ concept_current_dir }}/C{NNN}.md`
+  - `{{ workflow_current_dir }}/W{NNN}.md`
+  - Keep living-doc concept/workflow entries compact: keep headings and required fields updated, and store richer rationale in per-ID files.
 
 ## Epistemic Per-ID File Requirement (Required)
 
