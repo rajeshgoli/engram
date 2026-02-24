@@ -1086,6 +1086,8 @@ class TestNextChunk:
         assert "/epistemic_state/current/E*.md" in prompt_text
         assert "/epistemic_state/history/E*.md" in prompt_text
         assert "should be detailed and coherent, not terse" in prompt_text
+        assert "/concept_registry/current/C*.md" in prompt_text
+        assert "/workflow_registry/current/W*.md" in prompt_text
 
     def test_normal_chunk_creates_context_worktree_in_git_repo(self, project, config):
         subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True)

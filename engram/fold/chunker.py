@@ -287,9 +287,11 @@ def cleanup_chunk_context_worktree(project_root: Path, worktree_path: Path | Non
         return
 
     try:
-        resolved = worktree_path.resolve()
+        resolved = Path(worktree_path).resolve()
     except OSError:
-        resolved = worktree_path
+        resolved = None
+    if resolved is None:
+        return
 
     temp_root = Path(tempfile.gettempdir())
     try:
@@ -1117,6 +1119,7 @@ def next_chunk(
             chunk_type=drift_type,
             input_path=input_path,
             doc_paths=doc_paths,
+            pre_assigned_ids=None,
             project_root=project_root,
             context_worktree_path=context_worktree_path,
             context_commit=context_commit,
@@ -1235,6 +1238,7 @@ def next_chunk(
         chunk_type="fold",
         input_path=input_path,
         doc_paths=doc_paths,
+        pre_assigned_ids=pre_assigned,
         project_root=project_root,
         context_worktree_path=context_worktree_path,
         context_commit=context_commit,

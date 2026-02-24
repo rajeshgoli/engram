@@ -49,3 +49,6 @@ Use ONLY these IDs for new entries. Do NOT invent your own.
 - For each E{NNN}, maintain inferred per-ID files:
   - mutable current state: `{{ doc_paths.epistemic | replace('.md', '') }}/current/E{NNN}.md`
   - append-only history: `{{ doc_paths.epistemic | replace('.md', '') }}/history/E{NNN}.md`
+- For concepts and workflows, keep mutable current-state details in:
+  - `{{ concept_current_dir }}/C{NNN}.md`
+  - `{{ workflow_current_dir }}/W{NNN}.md`
