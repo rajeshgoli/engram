@@ -96,6 +96,19 @@ Graveyard files are append-only. Never edit existing graveyard entries.
   Treat them as "user pasted external context" signals, not literal project facts.
 - When prompts contradict docs/issues, the prompt is authoritative
 
+### Session-manager / orchestration artifacts (authority handling)
+
+- Lines starting with `[sm ...]` (for example `[sm wait]`, `[sm remind]`, `[sm status]`) are control-plane telemetry, not project facts.
+- Blocks starting with `[Input from: <agent> ... via sm send]` are relayed inter-agent messages.
+  Treat them as execution context by default, not as top-authority product intent.
+- If a relayed message clearly contains upstream user direction, extract that direction once
+  and avoid recording downstream orchestration chatter as separate decisions.
+- Authority order for conflicting statements:
+  1. Direct user prompts
+  2. Issue/doc artifacts
+  3. Relayed `sm send` agent messages
+  4. `[sm ...]` system markers
+
 ## Style
 
 - **Be succinct.** High information density. No filler.
@@ -152,6 +165,7 @@ Pre-assigned epistemic IDs for this chunk (prepare files if used):
 - When two artifacts make contradictory claims, that's an epistemic entry.
 - For each touched E{NNN}, keep exactly one coherent current position (no contradictory parallel states).
 - Do NOT add entries about the fold process itself.
+- Do NOT add concepts/claims/workflows derived only from session-manager telemetry (`[sm ...]`) or agent-to-agent dispatch mechanics.
 - If this input explicitly states a concept's source files were deleted, mark it DEAD.
 - When an ORPHANED CONCEPTS section is present, triage each one.
 - If content is ambiguous or contradictory and cannot be resolved from this input, record/maintain the uncertainty in epistemic state (e.g., contested) rather than self-verifying from repo code.
