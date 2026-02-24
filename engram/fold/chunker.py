@@ -91,6 +91,7 @@ _WORKFLOW_EXPLICIT_SIGNAL_TERMS = (
     "runbook",
     "playbook",
 )
+_STABLE_ID_RE = re.compile(r"\b([CEW])(\d{3,})\b", re.IGNORECASE)
 
 
 @dataclass
@@ -137,6 +138,10 @@ class ChunkResult:
     budget: int
     living_docs_chars: int
     remaining_queue: int
+    living_docs_budget_chars: int | None = None
+    planning_context_chars: int = 0
+    planning_predicted_ids: dict[str, list[str]] = field(default_factory=dict)
+    planning_context_ids: dict[str, list[str]] = field(default_factory=dict)
     date_range: str | None = None
     drift_entry_count: int = 0
     pre_assigned_ids: dict[str, list[str]] = field(default_factory=dict)
@@ -1087,7 +1092,125 @@ def scan_drift(
 # ------------------------------------------------------------------
 
 
-def compute_budget(config: dict, doc_paths: dict[str, Path]) -> tuple[int, int]:
+def _living_docs_char_counts(
+    doc_paths: dict[str, Path],
+    *,
+    mode: str = "full",
+) -> tuple[int, int]:
+    """Return (full_chars, budget_basis_chars) for living docs."""
+    living_doc_keys = ["timeline", "concepts", "epistemic", "workflows"]
+    full_chars = 0
+    budget_basis_chars = 0
+    selected_mode = mode.strip().lower()
+
+    for key in living_doc_keys:
+        path = doc_paths.get(key)
+        if not path or not path.exists():
+            continue
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+
+        file_chars = len(text)
+        full_chars += file_chars
+
+        if selected_mode in {"index", "index_headings"}:
+            lines = text.splitlines(keepends=True)
+            basis = 0
+            for idx, line in enumerate(lines):
+                if idx < 12:
+                    basis += len(line)
+                    continue
+                if line.startswith("#") or line.startswith("Updated by"):
+                    basis += len(line)
+            budget_basis_chars += basis
+        else:
+            budget_basis_chars += file_chars
+
+    return full_chars, budget_basis_chars
+
+
+def _predict_touched_ids(
+    *,
+    items: list[dict[str, Any]],
+    project_root: Path,
+    max_items: int = 24,
+    max_ids_per_type: int = 12,
+) -> dict[str, list[str]]:
+    """Cheap planning pass: predict IDs likely touched by upcoming queue items."""
+    predicted: dict[str, set[str]] = {"C": set(), "E": set(), "W": set()}
+    preview_items = items[:max(1, max_items)]
+
+    for item in preview_items:
+        text = _read_queue_entry_text(project_root, item)
+        if not text:
+            continue
+        for match in _STABLE_ID_RE.finditer(text):
+            prefix = match.group(1).upper()
+            value = int(match.group(2))
+            stable_id = f"{prefix}{value:03d}"
+            bucket = predicted.get(prefix)
+            if bucket is not None:
+                bucket.add(stable_id)
+
+    result: dict[str, list[str]] = {}
+    for prefix in ("C", "E", "W"):
+        ids = sorted(predicted[prefix], key=lambda stable: int(stable[1:]))
+        if max_ids_per_type > 0:
+            ids = ids[:max_ids_per_type]
+        if ids:
+            result[prefix] = ids
+    return result
+
+
+def _collect_context_pack(
+    *,
+    doc_paths: dict[str, Path],
+    predicted_ids: dict[str, list[str]],
+    max_ids_per_type: int = 8,
+    max_chars: int = 120_000,
+) -> tuple[list[Path], int, dict[str, list[str]]]:
+    """Collect existing per-ID current files for adaptive budgeting."""
+    roots = {
+        "C": doc_paths["concepts"].with_suffix("") / "current",
+        "E": doc_paths["epistemic"].with_suffix("") / "current",
+        "W": doc_paths["workflows"].with_suffix("") / "current",
+    }
+    files: list[Path] = []
+    chars = 0
+    included_ids: dict[str, list[str]] = {}
+
+    for prefix in ("C", "E", "W"):
+        ids = predicted_ids.get(prefix, [])
+        if max_ids_per_type > 0:
+            ids = ids[:max_ids_per_type]
+        for stable_id in ids:
+            candidate = roots[prefix] / f"{stable_id}.md"
+            if not candidate.exists():
+                continue
+            try:
+                text = candidate.read_text()
+            except OSError:
+                continue
+
+            text_chars = len(text)
+            if max_chars > 0 and chars + text_chars > max_chars:
+                return files, chars, included_ids
+
+            files.append(candidate)
+            chars += text_chars
+            included_ids.setdefault(prefix, []).append(stable_id)
+
+    return files, chars, included_ids
+
+
+def compute_budget(
+    config: dict,
+    doc_paths: dict[str, Path],
+    *,
+    context_pack_chars: int = 0,
+) -> tuple[int, int]:
     """Compute available char budget for chunk content.
 
     Returns (budget, living_docs_chars).
@@ -1096,15 +1219,15 @@ def compute_budget(config: dict, doc_paths: dict[str, Path]) -> tuple[int, int]:
     context_limit = budget_cfg.get("context_limit_chars", 600_000)
     overhead = budget_cfg.get("instructions_overhead", 100_000)
     max_chunk = budget_cfg.get("max_chunk_chars", 80_000)
+    living_docs_budget_mode = str(
+        budget_cfg.get("living_docs_budget_mode", "full"),
+    ).lower()
 
-    living_doc_keys = ["timeline", "concepts", "epistemic", "workflows"]
-    living_docs_chars = 0
-    for key in living_doc_keys:
-        p = doc_paths.get(key)
-        if p and p.exists():
-            living_docs_chars += len(p.read_text())
-
-    remaining = context_limit - living_docs_chars - overhead
+    living_docs_chars, budget_basis_chars = _living_docs_char_counts(
+        doc_paths,
+        mode=living_docs_budget_mode,
+    )
+    remaining = context_limit - budget_basis_chars - overhead - max(0, context_pack_chars)
     budget = min(max(0, remaining), max_chunk)
     return budget, living_docs_chars
 
@@ -1200,7 +1323,46 @@ def next_chunk(
     chunk_id = len(existing) + 1
 
     doc_paths = resolve_doc_paths(config, project_root)
-    budget, living_docs_chars = compute_budget(config, doc_paths)
+    budget_cfg = config.get("budget", {})
+    planning_enabled = bool(budget_cfg.get("adaptive_context_budgeting", True))
+    planning_preview_items = int(budget_cfg.get("planning_preview_items", 24) or 24)
+    planning_max_ids_per_type = int(
+        budget_cfg.get("adaptive_context_max_ids_per_type", 8) or 8,
+    )
+    planning_max_context_chars = int(
+        budget_cfg.get("adaptive_context_max_chars", 120_000) or 120_000,
+    )
+    living_docs_budget_mode = str(
+        budget_cfg.get("living_docs_budget_mode", "full"),
+    ).lower()
+
+    planning_predicted_ids: dict[str, list[str]] = {}
+    planning_context_ids: dict[str, list[str]] = {}
+    planning_context_chars = 0
+
+    if planning_enabled:
+        planning_predicted_ids = _predict_touched_ids(
+            items=queue,
+            project_root=project_root,
+            max_items=max(1, planning_preview_items),
+            max_ids_per_type=max(1, planning_max_ids_per_type),
+        )
+        _context_files, planning_context_chars, planning_context_ids = _collect_context_pack(
+            doc_paths=doc_paths,
+            predicted_ids=planning_predicted_ids,
+            max_ids_per_type=max(1, planning_max_ids_per_type),
+            max_chars=max(0, planning_max_context_chars),
+        )
+
+    budget, living_docs_chars = compute_budget(
+        config,
+        doc_paths,
+        context_pack_chars=planning_context_chars,
+    )
+    _living_chars_full, living_docs_budget_chars = _living_docs_char_counts(
+        doc_paths,
+        mode=living_docs_budget_mode,
+    )
 
     # Check drift priorities
     drift = scan_drift(config, project_root, fold_from=fold_from)
@@ -1357,6 +1519,10 @@ def next_chunk(
             chunk_chars=len(input_content),
             budget=budget,
             living_docs_chars=living_docs_chars,
+            living_docs_budget_chars=living_docs_budget_chars,
+            planning_context_chars=planning_context_chars,
+            planning_predicted_ids=planning_predicted_ids,
+            planning_context_ids=planning_context_ids,
             remaining_queue=len(queue),
             drift_entry_count=drift_counts.get(drift_type, 0),
             context_worktree_path=context_worktree_path,
@@ -1492,6 +1658,10 @@ def next_chunk(
         chunk_chars=chunk_chars,
         budget=budget,
         living_docs_chars=living_docs_chars,
+        living_docs_budget_chars=living_docs_budget_chars,
+        planning_context_chars=planning_context_chars,
+        planning_predicted_ids=planning_predicted_ids,
+        planning_context_ids=planning_context_ids,
         remaining_queue=len(queue),
         date_range=date_range,
         pre_assigned_ids=pre_assigned,

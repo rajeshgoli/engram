@@ -15,12 +15,15 @@ from engram.fold.chunker import (
     _QUEUE_TEXT_CACHE,
     ChunkResult,
     DriftReport,
+    _collect_context_pack,
     _extract_code_paths,
     _extract_latest_date,
     _find_claims_by_status,
     _find_orphaned_concepts,
     _find_stale_epistemic_entries,
     _find_workflow_repetitions,
+    _living_docs_char_counts,
+    _predict_touched_ids,
     _resolve_git_line_commit_date,
     _read_queue_entry_text,
     _render_item_content,
@@ -1076,6 +1079,74 @@ class TestComputeBudget:
         assert budget == 0
         assert living_chars >= 600_000
 
+    def test_index_headings_mode_uses_thin_budget_basis(self, project, config):
+        from engram.config import resolve_doc_paths
+
+        paths = resolve_doc_paths(config, project)
+        config["budget"]["living_docs_budget_mode"] = "index_headings"
+
+        timeline = paths["timeline"]
+        body = ["# Timeline\n", "Updated by fold\n"] + ["x\n"] * 400_000
+        timeline.write_text("".join(body))
+
+        budget, living_chars = compute_budget(config, paths)
+        full_chars, basis_chars = _living_docs_char_counts(paths, mode="index_headings")
+
+        assert living_chars == full_chars
+        assert full_chars > 500_000
+        assert basis_chars < 5_000
+        assert budget == config["budget"]["max_chunk_chars"]
+
+    def test_context_pack_chars_reduce_budget(self, project, config):
+        from engram.config import resolve_doc_paths
+
+        paths = resolve_doc_paths(config, project)
+        config["budget"]["living_docs_budget_mode"] = "index_headings"
+        config["budget"]["context_limit_chars"] = 120_000
+        config["budget"]["max_chunk_chars"] = 200_000
+
+        budget_without_pack, _ = compute_budget(config, paths)
+        budget_with_pack, _ = compute_budget(config, paths, context_pack_chars=50_000)
+
+        assert budget_without_pack < 120_000
+        assert budget_with_pack == max(0, budget_without_pack - 50_000)
+
+
+class TestAdaptivePlanning:
+    def test_predict_touched_ids_from_queue_text(self, project):
+        doc_path = project / "docs" / "working" / "plan.md"
+        doc_path.parent.mkdir(parents=True, exist_ok=True)
+        doc_path.write_text("Touches C012, E004 and W003 during revisits.")
+        items = [_make_doc_item(path="docs/working/plan.md", chars=120)]
+
+        predicted = _predict_touched_ids(items=items, project_root=project)
+        assert predicted["C"] == ["C012"]
+        assert predicted["E"] == ["E004"]
+        assert predicted["W"] == ["W003"]
+
+    def test_collect_context_pack_uses_existing_per_id_files(self, project, config):
+        from engram.config import resolve_doc_paths
+
+        paths = resolve_doc_paths(config, project)
+        (paths["concepts"].with_suffix("") / "current").mkdir(parents=True, exist_ok=True)
+        (paths["epistemic"].with_suffix("") / "current").mkdir(parents=True, exist_ok=True)
+        (paths["workflows"].with_suffix("") / "current").mkdir(parents=True, exist_ok=True)
+
+        (paths["concepts"].with_suffix("") / "current" / "C001.md").write_text("C" * 100)
+        (paths["epistemic"].with_suffix("") / "current" / "E002.md").write_text("E" * 80)
+        (paths["workflows"].with_suffix("") / "current" / "W003.md").write_text("W" * 60)
+
+        files, chars, included = _collect_context_pack(
+            doc_paths=paths,
+            predicted_ids={"C": ["C001"], "E": ["E002"], "W": ["W003"]},
+            max_ids_per_type=4,
+            max_chars=500,
+        )
+
+        assert len(files) == 3
+        assert chars == 240
+        assert included == {"C": ["C001"], "E": ["E002"], "W": ["W003"]}
+
 
 # ------------------------------------------------------------------
 # Full scan_drift integration
@@ -1254,6 +1325,36 @@ class TestNextChunk:
         assert "should be detailed and coherent, not terse" in prompt_text
         assert "/concept_registry/current/C*.md" in prompt_text
         assert "/workflow_registry/current/W*.md" in prompt_text
+
+    def test_normal_chunk_reports_adaptive_planning_metadata(self, project, config):
+        config["budget"]["living_docs_budget_mode"] = "index_headings"
+        config["budget"]["planning_preview_items"] = 8
+        config["budget"]["adaptive_context_max_ids_per_type"] = 4
+        config["budget"]["adaptive_context_max_chars"] = 1000
+
+        doc_path = project / "docs" / "working" / "spec.md"
+        doc_path.parent.mkdir(parents=True, exist_ok=True)
+        doc_path.write_text("Touches C001 E001 W001 in one pass.\n")
+
+        concepts_current = project / "docs" / "decisions" / "concept_registry" / "current"
+        epistemic_current = project / "docs" / "decisions" / "epistemic_state" / "current"
+        workflows_current = project / "docs" / "decisions" / "workflow_registry" / "current"
+        concepts_current.mkdir(parents=True, exist_ok=True)
+        epistemic_current.mkdir(parents=True, exist_ok=True)
+        workflows_current.mkdir(parents=True, exist_ok=True)
+        (concepts_current / "C001.md").write_text("concept detail\n")
+        (epistemic_current / "E001.md").write_text("epistemic detail\n")
+        (workflows_current / "W001.md").write_text("workflow detail\n")
+
+        _write_queue(project, [_make_doc_item(path="docs/working/spec.md", chars=120)])
+        result = next_chunk(config, project)
+
+        assert result.planning_predicted_ids.get("C") == ["C001"]
+        assert result.planning_predicted_ids.get("E") == ["E001"]
+        assert result.planning_predicted_ids.get("W") == ["W001"]
+        assert result.planning_context_ids == {"C": ["C001"], "E": ["E001"], "W": ["W001"]}
+        assert result.planning_context_chars > 0
+        assert isinstance(result.living_docs_budget_chars, int)
 
     def test_normal_chunk_creates_context_worktree_in_git_repo(self, project, config):
         subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True)

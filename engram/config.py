@@ -51,6 +51,11 @@ DEFAULTS: dict[str, Any] = {
         "context_limit_chars": 600_000,
         "instructions_overhead": 10_000,
         "max_chunk_chars": 200_000,
+        "living_docs_budget_mode": "index_headings",
+        "adaptive_context_budgeting": True,
+        "planning_preview_items": 24,
+        "adaptive_context_max_ids_per_type": 8,
+        "adaptive_context_max_chars": 120_000,
     },
     "model": "sonnet",
 }
