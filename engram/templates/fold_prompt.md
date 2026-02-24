@@ -100,6 +100,9 @@ Graveyard files are append-only. Never edit existing graveyard entries.
 
 - **Be succinct.** High information density. No filler.
 - Timeline: short factual entries. What happened, why, what resulted.
+- Every timeline phase (`## Phase: ...`) must include an `IDs:` line:
+  - `IDs: C###, E###, W###` (one or more stable IDs), or
+  - `IDs: NONE(reason)` when no stable ID applies.
 - Concept registry: structured fields only. 5 lines ideal, 10 max.
 - Epistemic state (`epistemic_state.md`): 1-2 sentence position. 1-sentence agent guidance.
 - Workflow registry: structured fields only. Context + trigger/method.
