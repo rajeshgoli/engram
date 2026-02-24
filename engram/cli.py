@@ -90,6 +90,11 @@ budget:
   context_limit_chars: 600000
   instructions_overhead: 10000
   max_chunk_chars: 200000
+  living_docs_budget_mode: index_headings  # full | index_headings
+  adaptive_context_budgeting: true
+  planning_preview_items: 24
+  adaptive_context_max_ids_per_type: 8
+  adaptive_context_max_chars: 120000
 
 model: sonnet
 """
@@ -230,6 +235,12 @@ def next_chunk_cmd(project_root: str) -> None:
         click.echo(f"Chunk {result.chunk_id}:")
         click.echo(f"  Type: {result.chunk_type}")
         click.echo(f"  Living docs: {result.living_docs_chars:,} chars")
+        living_docs_budget_chars = getattr(result, "living_docs_budget_chars", None)
+        if isinstance(living_docs_budget_chars, int):
+            click.echo(f"  Budget basis: {living_docs_budget_chars:,} chars")
+        planning_context_chars = int(getattr(result, "planning_context_chars", 0) or 0)
+        if planning_context_chars > 0:
+            click.echo(f"  Planned context pack: {planning_context_chars:,} chars")
         click.echo(f"  Budget: {result.budget:,} chars")
 
         if result.chunk_type == "fold":
