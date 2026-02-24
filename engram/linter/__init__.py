@@ -20,6 +20,7 @@ from engram.linter.schema import (
     Violation,
     validate_concept_registry,
     validate_epistemic_state,
+    validate_timeline,
     validate_workflow_registry,
 )
 
@@ -70,6 +71,8 @@ def lint(
         violations.extend(validate_epistemic_state(living_docs["epistemic"], epistemic_path))
     if "workflows" in living_docs:
         violations.extend(validate_workflow_registry(living_docs["workflows"]))
+    if "timeline" in living_docs:
+        violations.extend(validate_timeline(living_docs["timeline"]))
 
     # Cross-reference validation (needs all docs combined)
     all_contents: dict[str, str] = dict(living_docs)

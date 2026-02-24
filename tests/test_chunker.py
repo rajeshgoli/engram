@@ -1306,6 +1306,7 @@ class TestNextChunk:
         input_text = result.input_path.read_text()
         assert "# Instructions" in input_text
         assert "Pre-assigned IDs for this chunk" in input_text
+        assert "Every timeline phase (`## Phase: ...`) must include an `IDs:` line" in input_text
         assert "Epistemic Per-ID File Requirement (Required)" in input_text
         assert "Per-ID current files (" in input_text
         assert "should be detailed and coherent" in input_text
@@ -1318,6 +1319,7 @@ class TestNextChunk:
         prompt_text = result.prompt_path.read_text()
         assert "knowledge fold chunk" in prompt_text
         assert "Pre-assigned IDs for this chunk" in prompt_text
+        assert "Every timeline phase entry must include 'IDs:'" in prompt_text
         assert "For standard fold/workflow_synthesis chunks, use only the input file + living docs." in prompt_text
         assert "Do NOT inspect source code/git/filesystem for this chunk." in prompt_text
         assert "/epistemic_state/current/E*.md" in prompt_text

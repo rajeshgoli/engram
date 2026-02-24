@@ -28,7 +28,7 @@ from engram.epistemic_history import (
     infer_current_path,
     infer_history_path,
 )
-from engram.parse import Section, extract_id, is_stub, parse_sections
+from engram.parse import PHASE_RE, Section, extract_id, is_stub, parse_sections
 
 
 # -- Heading patterns per doc type -----------------------------------------
@@ -86,6 +86,12 @@ _EPISTEMIC_STATUS_RE = re.compile(
 _CONTEXT_RE = re.compile(r'^\s*-?\s*\*?\*?Context\*?\*?:', re.MULTILINE)
 _TRIGGER_RE = re.compile(r'^\s*-?\s*\*?\*?Trigger(?:\s+for\s+change)?\*?\*?:', re.MULTILINE)
 _CURRENT_METHOD_RE = re.compile(r'^\s*-?\s*\*?\*?Current method\*?\*?:', re.MULTILINE)
+_TIMELINE_IDS_RE = re.compile(
+    r'^\s*-?\s*(?:\*\*IDs:\*\*|\*\*IDs\*\*:|IDs:)\s*(.+?)\s*$',
+    re.IGNORECASE | re.MULTILINE,
+)
+_TIMELINE_NONE_RE = re.compile(r'^NONE\((.*)\)$', re.IGNORECASE)
+_TIMELINE_ID_TOKEN_RE = re.compile(r'^[CEW]\d{3,}$')
 
 
 def _has_external_support_content(section_text: str) -> bool:
@@ -434,6 +440,69 @@ def validate_workflow_registry(content: str) -> list[Violation]:
                 "workflows", entry_id,
                 "CURRENT workflow missing required "
                 "'Trigger:' or 'Current method:' field",
+            ))
+
+    return violations
+
+
+def validate_timeline(content: str) -> list[Violation]:
+    """Validate timeline phase ID-qualification rules."""
+    violations: list[Violation] = []
+    sections = parse_sections(content)
+
+    for section in sections:
+        heading = section["heading"]
+        if not PHASE_RE.match(heading):
+            continue
+
+        phase_label = heading.removeprefix("## ").strip()
+        match = _TIMELINE_IDS_RE.search(section["text"])
+        if not match:
+            violations.append(Violation(
+                "timeline",
+                None,
+                f"Timeline phase '{phase_label}' missing required 'IDs:' field. "
+                "Use 'IDs: C###, E###, W###' or 'IDs: NONE(reason)'.",
+            ))
+            continue
+
+        value = match.group(1).strip()
+        if not value:
+            violations.append(Violation(
+                "timeline",
+                None,
+                f"Timeline phase '{phase_label}' has empty 'IDs:' field.",
+            ))
+            continue
+
+        none_match = _TIMELINE_NONE_RE.fullmatch(value)
+        if none_match:
+            reason = none_match.group(1).strip()
+            if not reason:
+                violations.append(Violation(
+                    "timeline",
+                    None,
+                    f"Timeline phase '{phase_label}' uses 'IDs: NONE(...)' without a reason.",
+                ))
+            continue
+
+        tokens = [token.strip() for token in value.split(",") if token.strip()]
+        if not tokens:
+            violations.append(Violation(
+                "timeline",
+                None,
+                f"Timeline phase '{phase_label}' has malformed 'IDs:' list; "
+                "provide comma-separated stable IDs.",
+            ))
+            continue
+
+        invalid_tokens = [token for token in tokens if not _TIMELINE_ID_TOKEN_RE.fullmatch(token)]
+        if invalid_tokens:
+            violations.append(Violation(
+                "timeline",
+                None,
+                f"Timeline phase '{phase_label}' has invalid ID tokens: "
+                f"{', '.join(invalid_tokens)}. Use C###/E###/W### or NONE(reason).",
             ))
 
     return violations

@@ -17,6 +17,7 @@ from engram.linter.schema import (
     Violation,
     validate_concept_registry,
     validate_epistemic_state,
+    validate_timeline,
     validate_workflow_registry,
 )
 
@@ -74,10 +75,12 @@ VALID_TIMELINE = """\
 # Timeline
 
 ## Phase: Early Architecture (2024-Q4)
+IDs: C001, E001, W002
 
 Built initial swing detection with LegDetector (C001). Single-timeframe.
 
 ## Phase: Signal Rework (2025-Q1)
+IDs: C003
 
 Replaced proximity pruning (C003 DEAD) with structure-driven approach.
 """
@@ -546,6 +549,80 @@ Just a description, no required fields.
 """
         violations = validate_workflow_registry(doc)
         assert len(violations) == 2
+
+
+# ======================================================================
+# Schema: timeline
+# ======================================================================
+
+class TestTimelineSchema:
+    def test_valid_timeline_with_ids(self) -> None:
+        assert validate_timeline(VALID_TIMELINE) == []
+
+    def test_phase_missing_ids_field(self) -> None:
+        doc = """\
+# Timeline
+
+## Phase: Missing IDs (2026-Q1)
+Narrative event without qualification.
+"""
+        violations = validate_timeline(doc)
+        assert len(violations) == 1
+        assert "missing required 'IDs:' field" in violations[0].message
+
+    def test_phase_none_with_reason_is_valid(self) -> None:
+        doc = """\
+# Timeline
+
+## Phase: Project Setup (2024-Q1)
+IDs: NONE(pure onboarding logistics, no canonical entities yet)
+Created repository and basic tooling.
+"""
+        assert validate_timeline(doc) == []
+
+    def test_phase_none_without_reason_is_invalid(self) -> None:
+        doc = """\
+# Timeline
+
+## Phase: Empty None (2024-Q1)
+IDs: NONE()
+Created repository and basic tooling.
+"""
+        violations = validate_timeline(doc)
+        assert len(violations) == 1
+        assert "without a reason" in violations[0].message
+
+    def test_phase_invalid_id_token(self) -> None:
+        doc = """\
+# Timeline
+
+## Phase: Bad IDs (2025-Q2)
+IDs: C001, Z999
+Updated approach.
+"""
+        violations = validate_timeline(doc)
+        assert len(violations) == 1
+        assert "invalid ID tokens" in violations[0].message
+
+    def test_phase_bullet_bold_ids_format(self) -> None:
+        doc = """\
+# Timeline
+
+## Phase: Alternate IDs Formatting (2025-Q3)
+- **IDs:** C001, E002
+Updated approach.
+"""
+        assert validate_timeline(doc) == []
+
+    def test_phase_bullet_bold_label_ids_format(self) -> None:
+        doc = """\
+# Timeline
+
+## Phase: Alternate IDs Label Formatting (2025-Q3)
+- **IDs**: C001, E002
+Updated approach.
+"""
+        assert validate_timeline(doc) == []
 
 
 # ======================================================================
