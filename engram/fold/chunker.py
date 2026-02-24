@@ -79,7 +79,7 @@ _QUEUE_TEXT_CACHE: OrderedDict[tuple[str, str, int, int], str] = OrderedDict()
 # Evidence bullets in external epistemic history files.
 _EVIDENCE_COMMIT_RE = re.compile(r"Evidence@([0-9a-fA-F]{7,40})")
 _EVIDENCE_COMMIT_DATE_CACHE: dict[tuple[str, str], datetime | None] = {}
-_HEADING_LINE_COMMIT_DATE_CACHE: dict[tuple[str, str, int, int, int], datetime | None] = {}
+_HEADING_LINE_COMMIT_DATE_CACHE: dict[tuple[str, str, int, int, int, str], datetime | None] = {}
 _CHUNK_WORKTREE_NAME_RE = re.compile(r"^engram-chunk-\d{3,}-[0-9a-f]{8}-[A-Za-z0-9._-]+$")
 _WORKFLOW_EXPLICIT_SIGNAL_TERMS = (
     "new workflow",
@@ -617,7 +617,15 @@ def _resolve_git_line_commit_date(
         file_mtime_ns = -1
         file_size = -1
 
-    cache_key = (root_key, relative_path, line_number_1based, file_mtime_ns, file_size)
+    head_commit = _resolve_head_commit(project_root) or "__no_head__"
+    cache_key = (
+        root_key,
+        relative_path,
+        line_number_1based,
+        file_mtime_ns,
+        file_size,
+        head_commit,
+    )
     if cache_key in _HEADING_LINE_COMMIT_DATE_CACHE:
         return _HEADING_LINE_COMMIT_DATE_CACHE[cache_key]
 

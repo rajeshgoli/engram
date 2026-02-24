@@ -509,6 +509,60 @@ class TestFindClaimsByStatus:
         assert blame_calls == 2
         assert second >= first
 
+    def test_heading_blame_cache_invalidates_when_head_changes_only(self, project, monkeypatch):
+        subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=project, check=True)
+
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E001: callback parity baseline (contested)\n"
+            "**Current position:** staged for first commit.\n",
+        )
+
+        import engram.fold.chunker as chunker_module
+
+        chunker_module._HEADING_LINE_COMMIT_DATE_CACHE.clear()
+        original_run = chunker_module.subprocess.run
+        blame_calls = 0
+
+        def counting_run(*args, **kwargs):
+            nonlocal blame_calls
+            cmd = args[0] if args else kwargs.get("args")
+            if isinstance(cmd, list) and "blame" in cmd:
+                blame_calls += 1
+            return original_run(*args, **kwargs)
+
+        monkeypatch.setattr(chunker_module.subprocess, "run", counting_run)
+
+        # File is uncommitted; blame should fail and cache None.
+        first = _resolve_git_line_commit_date(
+            project_root=project,
+            file_path=epistemic,
+            line_number_1based=3,
+        )
+        assert first is None
+        assert blame_calls == 1
+
+        # Commit without changing file bytes.
+        subprocess.run(["git", "add", "."], cwd=project, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "add epistemic file"],
+            cwd=project,
+            check=True,
+            capture_output=True,
+        )
+
+        second = _resolve_git_line_commit_date(
+            project_root=project,
+            file_path=epistemic,
+            line_number_1based=3,
+        )
+        assert second is not None
+        # Must re-run blame after HEAD change even when mtime/size key parts are unchanged.
+        assert blame_calls == 2
+
 
 class TestFindStaleEpistemicEntries:
     def test_queue_text_cache_avoids_reread(self, project, monkeypatch):
