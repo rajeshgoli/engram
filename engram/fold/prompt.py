@@ -286,7 +286,11 @@ def render_seed_prompt(
     """Render a bootstrap seed prompt."""
     env = _get_env()
     template = env.get_template("seed_prompt.md")
+    layout_vars = {
+        **_concept_workflow_layout_template_vars(doc_paths),
+    }
     return template.render(
         doc_paths=_stringify_paths(doc_paths),
+        **layout_vars,
         pre_assigned_ids=pre_assigned_ids or {},
     )
