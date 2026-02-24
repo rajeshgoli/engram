@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from engram.fold.chunker import (
     _find_orphaned_concepts,
     _find_stale_epistemic_entries,
     _find_workflow_repetitions,
+    _resolve_git_line_commit_date,
     _read_queue_entry_text,
     _render_item_content,
     cleanup_chunk_context_worktree,
@@ -441,6 +443,71 @@ class TestFindClaimsByStatus:
             project_root=project,
         )
         assert results == []
+
+    def test_heading_blame_cache_invalidates_when_file_changes(self, project, monkeypatch):
+        subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=project, check=True)
+
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E001: callback parity baseline (contested)\n"
+            "**Current position:** initial wording.\n",
+        )
+        subprocess.run(["git", "add", "."], cwd=project, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial contested heading"],
+            cwd=project,
+            check=True,
+            capture_output=True,
+        )
+
+        import engram.fold.chunker as chunker_module
+
+        chunker_module._HEADING_LINE_COMMIT_DATE_CACHE.clear()
+        original_run = chunker_module.subprocess.run
+        blame_calls = 0
+
+        def counting_run(*args, **kwargs):
+            nonlocal blame_calls
+            cmd = args[0] if args else kwargs.get("args")
+            if isinstance(cmd, list) and "blame" in cmd:
+                blame_calls += 1
+            return original_run(*args, **kwargs)
+
+        monkeypatch.setattr(chunker_module.subprocess, "run", counting_run)
+
+        first = _resolve_git_line_commit_date(
+            project_root=project,
+            file_path=epistemic,
+            line_number_1based=3,
+        )
+        assert first is not None
+        assert blame_calls == 1
+
+        time.sleep(1.1)
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E001: callback parity baseline (contested)\n"
+            "**Current position:** updated wording after review.\n",
+        )
+        subprocess.run(["git", "add", "."], cwd=project, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "update contested entry wording"],
+            cwd=project,
+            check=True,
+            capture_output=True,
+        )
+
+        second = _resolve_git_line_commit_date(
+            project_root=project,
+            file_path=epistemic,
+            line_number_1based=3,
+        )
+        assert second is not None
+        assert blame_calls == 2
+        assert second >= first
 
 
 class TestFindStaleEpistemicEntries:
