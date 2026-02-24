@@ -397,6 +397,51 @@ class TestFindClaimsByStatus:
         assert len(results) == 1
         assert results[0]["id"] == "E021"
 
+    def test_recent_heading_commit_suppresses_old_contested_requeue(self, project):
+        subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=project, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=project, check=True)
+
+        epistemic = project / "docs" / "decisions" / "epistemic_state.md"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%d")
+
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E001: callback parity baseline (believed)\n"
+            "**History:**\n"
+            f"- {old_date}: legacy investigation\n",
+        )
+        subprocess.run(["git", "add", "."], cwd=project, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial believed state"],
+            cwd=project,
+            check=True,
+            capture_output=True,
+        )
+
+        # Flip status now, but keep old dated history text.
+        epistemic.write_text(
+            "# Epistemic State\n\n"
+            "## E001: callback parity baseline (contested)\n"
+            "**History:**\n"
+            f"- {old_date}: legacy investigation\n",
+        )
+        subprocess.run(["git", "add", "."], cwd=project, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "flip claim to contested"],
+            cwd=project,
+            check=True,
+            capture_output=True,
+        )
+
+        results = _find_claims_by_status(
+            epistemic,
+            "contested",
+            14,
+            project_root=project,
+        )
+        assert results == []
+
 
 class TestFindStaleEpistemicEntries:
     def test_queue_text_cache_avoids_reread(self, project, monkeypatch):
@@ -1168,6 +1213,58 @@ class TestNextChunk:
         assert "/epistemic_state/current/E102.md" in input_text
         assert "/epistemic_state/history/E102.md" in input_text
 
+    def test_workflow_preassign_novelty_gate_prefers_existing_variant(self, project, config):
+        (project / "docs" / "decisions" / "workflow_registry.md").write_text(
+            "# Workflow Registry\n\n"
+            "## W001: dev_branch_workflow (CURRENT)\n- **Context:** baseline.\n\n"
+            "## W005: epistemic_audit_evidence_gate (CURRENT)\n- **Context:** audit.\n\n"
+            "## W013: subsystem_deletion_epic (CURRENT)\n- **Context:** deletion.\n",
+        )
+
+        doc_path = project / "docs" / "working" / "spec.md"
+        doc_path.parent.mkdir(parents=True, exist_ok=True)
+        doc_path.write_text("# Test Spec\nGeneral updates\n")
+        _write_queue(project, [_make_doc_item(path="docs/working/spec.md", chars=100)])
+
+        result = next_chunk(config, project)
+        assert result.chunk_type == "fold"
+        assert "W" not in result.pre_assigned_ids
+        input_text = result.input_path.read_text()
+        assert "No workflow IDs were pre-assigned by novelty gate." in input_text
+
+    def test_workflow_synthesis_cooldown_after_recent_new_workflow(self, project, config):
+        workflows = project / "docs" / "decisions" / "workflow_registry.md"
+        workflows.write_text(
+            "# Workflow Registry\n\n"
+            "## W001: deploy_process (CURRENT)\n- **Context:** Deploy.\n\n"
+            "## W005: audit_process (CURRENT)\n- **Context:** Audit.\n\n"
+            "## W013: deletion_process (CURRENT)\n- **Context:** Delete.\n\n"
+            "## W025: windowed_loop (CURRENT)\n- **Context:** Windowed loop.\n\n",
+        )
+
+        # Simulate immediately previous fold pre-assigning W025.
+        chunks_dir = project / ".engram" / "chunks"
+        chunks_dir.mkdir(parents=True, exist_ok=True)
+        (chunks_dir / "chunk_001_input.md").write_text("# prior\n")
+        manifest = project / ".engram" / "chunks_manifest.yaml"
+        manifest.write_text(
+            "- id: 1\n"
+            "  date_range: \"2026-01-14 to 2026-01-14\"\n"
+            "  items: 1\n"
+            "  chars: 100\n"
+            "  input_file: chunk_001_input.md\n"
+            "  pre_assigned_workflow_ids:\n"
+            "    - W025\n",
+        )
+
+        doc_path = project / "docs" / "working" / "spec.md"
+        doc_path.parent.mkdir(parents=True, exist_ok=True)
+        doc_path.write_text("Content")
+        _write_queue(project, [_make_doc_item(path="docs/working/spec.md", chars=100)])
+
+        result = next_chunk(config, project)
+        assert result.chunk_type == "fold"
+
     def test_fold_chunk_does_not_include_orphan_triage_section(self, project, config):
         registry = project / "docs" / "decisions" / "concept_registry.md"
         registry.write_text(
@@ -1485,3 +1582,20 @@ class TestNextChunk:
         input_text = result.input_path.read_text()
         for cid in result.pre_assigned_ids["C"]:
             assert cid in input_text
+
+    def test_manifest_records_pre_assigned_workflow_ids(self, project, config):
+        doc_path = project / "docs" / "working" / "workflow_spec.md"
+        doc_path.parent.mkdir(parents=True, exist_ok=True)
+        doc_path.write_text("workflow changes")
+
+        item = _make_doc_item(path="docs/working/workflow_spec.md", chars=100)
+        item["entity_hints"] = [{"category": "W"}]
+        _write_queue(project, [item])
+
+        result = next_chunk(config, project)
+        assert result.chunk_type == "fold"
+        assert result.pre_assigned_ids["W"] == ["W001"]
+
+        manifest_text = (project / ".engram" / "chunks_manifest.yaml").read_text()
+        assert "pre_assigned_workflow_ids" in manifest_text
+        assert "- W001" in manifest_text

@@ -18,6 +18,9 @@ IDs survive renames, refactoring, and evolution. Never reuse an ID.
 
 Use ONLY these IDs for new entries. Do NOT invent your own.
 If no IDs are listed, do NOT create new entries/IDs in this chunk.
+{% if workflow_variant_only_mode %}
+No workflow IDs were pre-assigned by novelty gate. Prefer updating/adding variants on existing CURRENT workflows (usually W001) instead of creating a new W entry.
+{% endif %}
 
 {% if pre_assigned_ids %}
 {% for cat, ids in pre_assigned_ids.items() %}

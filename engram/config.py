@@ -39,6 +39,7 @@ DEFAULTS: dict[str, Any] = {
         "stale_unverified_days": 30,
         "stale_epistemic_days": 90,
         "workflow_repetition": 3,
+        "workflow_new_id_synthesis_cooldown_chunks": 3,
         # Reserve a small pool of IDs for normal fold chunks so background
         # agents can add genuinely new entries without inventing IDs even when
         # heuristics underestimate new entities.

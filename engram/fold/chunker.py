@@ -79,7 +79,18 @@ _QUEUE_TEXT_CACHE: OrderedDict[tuple[str, str, int, int], str] = OrderedDict()
 # Evidence bullets in external epistemic history files.
 _EVIDENCE_COMMIT_RE = re.compile(r"Evidence@([0-9a-fA-F]{7,40})")
 _EVIDENCE_COMMIT_DATE_CACHE: dict[tuple[str, str], datetime | None] = {}
+_HEADING_LINE_COMMIT_DATE_CACHE: dict[tuple[str, str, int], datetime | None] = {}
 _CHUNK_WORKTREE_NAME_RE = re.compile(r"^engram-chunk-\d{3,}-[0-9a-f]{8}-[A-Za-z0-9._-]+$")
+_WORKFLOW_EXPLICIT_SIGNAL_TERMS = (
+    "new workflow",
+    "create workflow",
+    "add workflow",
+    "workflow registry",
+    "workflow_synthesis",
+    "process pattern",
+    "runbook",
+    "playbook",
+)
 
 
 @dataclass
@@ -576,6 +587,71 @@ def _extract_latest_evidence_commit_date(
     return latest
 
 
+def _resolve_git_line_commit_date(
+    *,
+    project_root: Path,
+    file_path: Path,
+    line_number_1based: int,
+) -> datetime | None:
+    """Resolve the commit date for a specific file line via ``git blame``."""
+    if line_number_1based < 1:
+        return None
+
+    try:
+        root_key = str(project_root.resolve())
+    except OSError:
+        root_key = str(project_root)
+
+    try:
+        relative_path = str(file_path.resolve().relative_to(project_root.resolve()))
+    except OSError:
+        relative_path = str(file_path)
+    except ValueError:
+        relative_path = str(file_path)
+
+    cache_key = (root_key, relative_path, line_number_1based)
+    if cache_key in _HEADING_LINE_COMMIT_DATE_CACHE:
+        return _HEADING_LINE_COMMIT_DATE_CACHE[cache_key]
+
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(project_root),
+                "blame",
+                "--line-porcelain",
+                f"-L{line_number_1based},{line_number_1based}",
+                "--",
+                relative_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        _HEADING_LINE_COMMIT_DATE_CACHE[cache_key] = None
+        return None
+
+    if proc.returncode != 0:
+        _HEADING_LINE_COMMIT_DATE_CACHE[cache_key] = None
+        return None
+
+    commit_time: datetime | None = None
+    for line in proc.stdout.splitlines():
+        if line.startswith("committer-time "):
+            _, _, raw_ts = line.partition(" ")
+            try:
+                commit_time = datetime.fromtimestamp(int(raw_ts), tz=timezone.utc)
+            except ValueError:
+                commit_time = None
+            break
+
+    _HEADING_LINE_COMMIT_DATE_CACHE[cache_key] = commit_time
+    return commit_time
+
+
 def _latest_epistemic_activity_date(
     *,
     epistemic_path: Path,
@@ -693,8 +769,82 @@ def _read_queue_entries(queue_file: Path) -> list[dict[str, Any]]:
     return entries
 
 
+def _chunk_has_explicit_workflow_signal(
+    *,
+    items: list[dict[str, Any]],
+    project_root: Path,
+) -> bool:
+    """Return True when chunk items explicitly request new workflow handling."""
+    for item in items:
+        issue_title = str(item.get("issue_title") or "").lower()
+        item_path = str(item.get("path") or "").lower()
+        if "workflow" in issue_title:
+            return True
+        if "workflow" in item_path:
+            return True
+        queue_text = _read_queue_entry_text(project_root, item)
+        if any(term in queue_text for term in _WORKFLOW_EXPLICIT_SIGNAL_TERMS):
+            return True
+    return False
+
+
+def _read_manifest_entries(manifest_file: Path) -> list[dict[str, Any]]:
+    """Load manifest entries from YAML. Returns empty list on parse/read errors."""
+    if not manifest_file.exists():
+        return []
+
+    import yaml
+
+    try:
+        with open(manifest_file) as fh:
+            manifest = yaml.safe_load(fh) or []
+    except (OSError, yaml.YAMLError):
+        return []
+
+    if not isinstance(manifest, list):
+        return []
+    return [entry for entry in manifest if isinstance(entry, dict)]
+
+
+def _recent_preassigned_workflow_ids(
+    *,
+    manifest_file: Path,
+    current_chunk_id: int,
+    cooldown_chunks: int,
+) -> set[str]:
+    """Return W-IDs pre-assigned in recent fold chunks.
+
+    Only includes IDs from entries in ``[current_chunk_id - cooldown_chunks, current_chunk_id)``.
+    """
+    if cooldown_chunks <= 0:
+        return set()
+
+    start_id = max(1, current_chunk_id - cooldown_chunks)
+    recent_ids: set[str] = set()
+    for entry in _read_manifest_entries(manifest_file):
+        entry_id = entry.get("id")
+        if not isinstance(entry_id, int):
+            continue
+        if entry_id < start_id or entry_id >= current_chunk_id:
+            continue
+        workflow_ids = entry.get("pre_assigned_workflow_ids")
+        if not isinstance(workflow_ids, list):
+            continue
+        for workflow_id in workflow_ids:
+            if not isinstance(workflow_id, str):
+                continue
+            normalized = workflow_id.strip().upper()
+            if re.fullmatch(r"W\d{3,}", normalized):
+                recent_ids.add(normalized)
+    return recent_ids
+
+
 def _find_claims_by_status(
-    epistemic_path: Path, status: str, days_threshold: int,
+    epistemic_path: Path,
+    status: str,
+    days_threshold: int,
+    *,
+    project_root: Path | None = None,
 ) -> list[dict]:
     """Find epistemic entries with given status older than days_threshold."""
     if not epistemic_path.exists():
@@ -711,8 +861,21 @@ def _find_claims_by_status(
             epistemic_path=epistemic_path,
             section_heading=sec["heading"],
             section_text=sec["text"],
-            project_root=None,
+            project_root=project_root,
         )
+        heading_commit_date = (
+            _resolve_git_line_commit_date(
+                project_root=project_root,
+                file_path=epistemic_path,
+                line_number_1based=sec["start"] + 1,
+            )
+            if project_root is not None
+            else None
+        )
+        if heading_commit_date is not None and (
+            latest is None or heading_commit_date > latest
+        ):
+            latest = heading_commit_date
         if latest is None:
             continue
         age_days = (now - latest).days
@@ -805,23 +968,8 @@ def _read_last_workflow_synthesis_attempt(manifest_file: Path) -> dict[str, Any]
     This is used for a *cooldown* mechanism to avoid infinite drift loops when
     synthesis is repeatedly attempted but workflows remain unchanged.
     """
-    if not manifest_file.exists():
-        return None
-    import yaml
-
-    try:
-        with open(manifest_file) as fh:
-            manifest = yaml.safe_load(fh) or []
-    except yaml.YAMLError as exc:
-        log.warning("Could not parse %s — skipping workflow synthesis cooldown: %s", manifest_file, exc)
-        return None
-
-    if not isinstance(manifest, list):
-        return None
-
-    for entry in reversed(manifest):
-        if not isinstance(entry, dict):
-            continue
+    entries = _read_manifest_entries(manifest_file)
+    for entry in reversed(entries):
         if entry.get("type") == "workflow_synthesis":
             return entry
     return None
@@ -906,10 +1054,12 @@ def scan_drift(
         contested_claims=_find_claims_by_status(
             paths["epistemic"], "contested",
             thresholds.get("contested_review_days", 14),
+            project_root=project_root,
         ),
         stale_unverified=_find_claims_by_status(
             paths["epistemic"], "unverified",
             thresholds.get("stale_unverified_days", 30),
+            project_root=project_root,
         ),
         workflow_repetitions=_find_workflow_repetitions(paths["workflows"]),
         ref_commit=ref_commit,
@@ -1039,10 +1189,12 @@ def next_chunk(
     # Check drift priorities
     drift = scan_drift(config, project_root, fold_from=fold_from)
 
+    thresholds = config.get("thresholds", {})
+
     # Workflow synthesis cooldown:
     # - Avoid infinite workflow_synthesis drift loops when an agent doesn't merge workflows.
     # - Do NOT assume synthesis "completed" just because a chunk was generated.
-    cooldown_chunks = int(config.get("thresholds", {}).get("workflow_synthesis_cooldown_chunks", 5))
+    cooldown_chunks = int(thresholds.get("workflow_synthesis_cooldown_chunks", 5))
     if drift.workflow_repetitions:
         workflows_path = doc_paths.get("workflows")
         if workflows_path and workflows_path.exists():
@@ -1071,7 +1223,34 @@ def next_chunk(
             if chunk_id_preview - last_attempt["id"] <= cooldown_chunks:
                 drift.workflow_repetitions = []
 
-    thresholds = config.get("thresholds", {})
+    # New-workflow cooldown:
+    # - Avoid back-to-back "create workflow in fold chunk" followed immediately by
+    #   workflow_synthesis churn that merges it into W001.
+    # - Suppress synthesis briefly when CURRENT workflow set only expanded by a
+    #   newly pre-assigned workflow ID in recent chunks.
+    new_workflow_cooldown_chunks = int(
+        thresholds.get("workflow_new_id_synthesis_cooldown_chunks", 3),
+    )
+    if drift.workflow_repetitions and new_workflow_cooldown_chunks > 0:
+        current_chunk_id = chunk_id
+        recent_preassigned_workflow_ids = _recent_preassigned_workflow_ids(
+            manifest_file=manifest_file,
+            current_chunk_id=current_chunk_id,
+            cooldown_chunks=new_workflow_cooldown_chunks,
+        )
+        current_workflow_ids = {
+            str(entry.get("id", "")).upper()
+            for entry in drift.workflow_repetitions
+            if isinstance(entry.get("id"), str)
+        }
+        repetition_threshold = int(thresholds.get("workflow_repetition", 3))
+        if (
+            recent_preassigned_workflow_ids
+            and (recent_preassigned_workflow_ids & current_workflow_ids)
+            and len(current_workflow_ids) <= repetition_threshold + 1
+        ):
+            drift.workflow_repetitions = []
+
     drift_type = drift.triggered(thresholds)
 
     # Reuse ref_commit resolved by scan_drift (avoids duplicate git call)
@@ -1184,10 +1363,30 @@ def next_chunk(
 
     # Pre-assign IDs
     estimates = estimate_new_entities(chunk_items)
-    thresholds = config.get("thresholds", {})
     min_preassign_concepts = int(thresholds.get("min_preassign_concepts", 0) or 0)
     min_preassign_epistemic = int(thresholds.get("min_preassign_epistemic", 0) or 0)
     min_preassign_workflows = int(thresholds.get("min_preassign_workflows", 0) or 0)
+    workflow_variant_only_mode = False
+    has_explicit_workflow_signal = _chunk_has_explicit_workflow_signal(
+        items=chunk_items,
+        project_root=project_root,
+    )
+    current_workflow_entries = _find_workflow_repetitions(doc_paths["workflows"])
+    current_workflow_ids = {
+        str(entry.get("id", "")).upper()
+        for entry in current_workflow_entries
+        if isinstance(entry.get("id"), str)
+    }
+    if (
+        estimates["W"] <= 0
+        and min_preassign_workflows > 0
+        and not has_explicit_workflow_signal
+        and "W001" in current_workflow_ids
+        and len(current_workflow_ids) >= int(thresholds.get("workflow_repetition", 3))
+    ):
+        min_preassign_workflows = 0
+        workflow_variant_only_mode = True
+
     min_next_ids = _compute_min_next_ids_from_living_docs(doc_paths)
     db_path = engram_dir / "engram.db"
     with IDAllocator(db_path) as allocator:
@@ -1224,6 +1423,7 @@ def next_chunk(
         date_range=date_range,
         items_content=items_content,
         pre_assigned_ids=pre_assigned,
+        workflow_variant_only_mode=workflow_variant_only_mode,
         doc_paths=doc_paths,
         context_worktree_path=context_worktree_path,
         context_commit=context_commit,
@@ -1240,6 +1440,7 @@ def next_chunk(
         doc_paths=doc_paths,
         pre_assigned_ids=pre_assigned,
         project_root=project_root,
+        workflow_variant_only_mode=workflow_variant_only_mode,
         context_worktree_path=context_worktree_path,
         context_commit=context_commit,
     )
@@ -1260,6 +1461,11 @@ def next_chunk(
             f"  chars: {chunk_chars}\n"
             f"  input_file: {input_path.name}\n"
         )
+        preassigned_workflow_ids = pre_assigned.get("W", [])
+        if preassigned_workflow_ids:
+            fh.write("  pre_assigned_workflow_ids:\n")
+            for workflow_id in preassigned_workflow_ids:
+                fh.write(f"    - {workflow_id}\n")
 
     return ChunkResult(
         chunk_id=chunk_id,

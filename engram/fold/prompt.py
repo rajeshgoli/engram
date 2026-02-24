@@ -61,6 +61,7 @@ def render_chunk_input(
     date_range: str,
     items_content: str,
     pre_assigned_ids: dict[str, list[str]],
+    workflow_variant_only_mode: bool = False,
     doc_paths: dict[str, Path],
     context_worktree_path: Path | None = None,
     context_commit: str | None = None,
@@ -81,6 +82,7 @@ def render_chunk_input(
         doc_paths=_stringify_paths(doc_paths),
         **layout_vars,
         pre_assigned_ids=pre_assigned_ids,
+        workflow_variant_only_mode=workflow_variant_only_mode,
         context_worktree_path=str(context_worktree_path) if context_worktree_path else None,
         context_commit=context_commit,
     )
@@ -158,6 +160,7 @@ def render_agent_prompt(
     doc_paths: dict[str, Path],
     project_root: Path | None = None,
     pre_assigned_ids: dict[str, list[str]] | None = None,
+    workflow_variant_only_mode: bool = False,
     context_worktree_path: Path | None = None,
     context_commit: str | None = None,
 ) -> str:
@@ -268,13 +271,19 @@ def render_agent_prompt(
         f"- DEAD/refuted entries: 1-2 sentences max. Key lesson + what replaced it.\n"
         f"- Process ALL items in the chunk\n"
         f"- Use ONLY IDs listed under 'Pre-assigned IDs for this chunk'. If none are listed, do NOT create new IDs in this chunk.\n"
-        f"\n"
-        f"After All Edits: Lint Check (Required)\n"
-        f"\n"
-        f"Run the linter after completing all edits:\n"
-        f"  {lint_cmd}\n"
-        f"Fix every violation reported. Re-run until lint passes with 0 violations.\n"
-        f"Do not stop until lint is clean.\n"
+        + (
+            "- Workflow novelty gate: when no W IDs are pre-assigned for this chunk, "
+            "prefer updating an existing CURRENT workflow (usually W001 variant) instead of creating a new workflow entry.\n"
+            if workflow_variant_only_mode
+            else ""
+        )
+        + f"\n"
+        + f"After All Edits: Lint Check (Required)\n"
+        + f"\n"
+        + f"Run the linter after completing all edits:\n"
+        + f"  {lint_cmd}\n"
+        + f"Fix every violation reported. Re-run until lint passes with 0 violations.\n"
+        + f"Do not stop until lint is clean.\n"
     )
 
 
