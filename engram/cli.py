@@ -84,6 +84,7 @@ thresholds:
   stale_unverified_days: 30
   stale_epistemic_days: 90
   workflow_repetition: 3
+  workflow_new_id_synthesis_cooldown_chunks: 3
 
 budget:
   context_limit_chars: 600000
