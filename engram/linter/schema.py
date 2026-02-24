@@ -87,7 +87,7 @@ _CONTEXT_RE = re.compile(r'^\s*-?\s*\*?\*?Context\*?\*?:', re.MULTILINE)
 _TRIGGER_RE = re.compile(r'^\s*-?\s*\*?\*?Trigger(?:\s+for\s+change)?\*?\*?:', re.MULTILINE)
 _CURRENT_METHOD_RE = re.compile(r'^\s*-?\s*\*?\*?Current method\*?\*?:', re.MULTILINE)
 _TIMELINE_IDS_RE = re.compile(
-    r'^\s*-?\s*(?:\*\*IDs:\*\*|IDs:)\s*(.+?)\s*$',
+    r'^\s*-?\s*(?:\*\*IDs:\*\*|\*\*IDs\*\*:|IDs:)\s*(.+?)\s*$',
     re.IGNORECASE | re.MULTILINE,
 )
 _TIMELINE_NONE_RE = re.compile(r'^NONE\((.*)\)$', re.IGNORECASE)

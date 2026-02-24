@@ -614,6 +614,16 @@ Updated approach.
 """
         assert validate_timeline(doc) == []
 
+    def test_phase_bullet_bold_label_ids_format(self) -> None:
+        doc = """\
+# Timeline
+
+## Phase: Alternate IDs Label Formatting (2025-Q3)
+- **IDs**: C001, E002
+Updated approach.
+"""
+        assert validate_timeline(doc) == []
+
 
 # ======================================================================
 # Cross-reference validation
