@@ -7,6 +7,7 @@ can regenerate the briefing without instantiating a Dispatcher.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -48,8 +49,15 @@ def regenerate_l0_briefing(
     if not living_contents:
         return False
 
+    lookup_patterns = _build_lookup_patterns(doc_paths, project_root)
+
     # Generate briefing via lightweight model call
-    briefing_text = _generate_briefing(config, project_root, "\n\n".join(living_contents))
+    briefing_text = _generate_briefing(
+        config,
+        project_root,
+        "\n\n".join(living_contents),
+        lookup_patterns,
+    )
     if not briefing_text:
         log.warning("L0 briefing generation returned empty result")
         return False
@@ -64,6 +72,7 @@ def _generate_briefing(
     config: dict[str, Any],
     project_root: Path,
     living_docs_content: str,
+    lookup_patterns: dict[str, str],
 ) -> str | None:
     """Generate L0 briefing by shelling out to a fast model.
 
@@ -73,6 +82,17 @@ def _generate_briefing(
         "Compress the following project knowledge into a concise briefing "
         "(50-100 lines). Focus on: what's alive vs dead, contested claims, "
         "key workflows, and agent guidance. Use stable IDs (C###/E###/W###).\n\n"
+        "Output requirements:\n"
+        "1) Keep the briefing self-contained: when an ID is first introduced, add a "
+        "short inline gloss so the line is understandable without opening other files.\n"
+        "2) Include a section titled 'Lookup Hooks (Use When Needed)' that tells agents "
+        "exactly which per-ID files to open for deeper context.\n"
+        "3) In Lookup Hooks, include these file patterns exactly:\n"
+        f"- Concept details: {lookup_patterns['concepts']}\n"
+        f"- Epistemic current state: {lookup_patterns['epistemic_current']}\n"
+        f"- Epistemic history/provenance: {lookup_patterns['epistemic_history']}\n"
+        f"- Workflow details: {lookup_patterns['workflows']}\n"
+        "4) Keep the briefing concise but actionable; avoid ID-only shorthand with no hook.\n\n"
         f"{living_docs_content}"
     )
 
@@ -90,6 +110,31 @@ def _generate_briefing(
         log.warning("L0 briefing generation failed")
 
     return None
+
+
+def _build_lookup_patterns(doc_paths: dict[str, Path], project_root: Path) -> dict[str, str]:
+    """Build per-ID file lookup patterns for L0 briefing instructions."""
+    concepts = _to_repo_relative(doc_paths["concepts"], project_root).with_suffix("")
+    epistemic = _to_repo_relative(doc_paths["epistemic"], project_root).with_suffix("")
+    workflows = _to_repo_relative(doc_paths["workflows"], project_root).with_suffix("")
+    return {
+        "concepts": f"{concepts}/current/C###.md",
+        "epistemic_current": f"{epistemic}/current/E###.md",
+        "epistemic_history": f"{epistemic}/history/E###.md",
+        "workflows": f"{workflows}/current/W###.md",
+    }
+
+
+def _to_repo_relative(path: Path, project_root: Path) -> Path:
+    """Return path relative to project root when possible."""
+    resolved_path = path.resolve()
+    resolved_root = project_root.resolve()
+    try:
+        return Path(os.path.relpath(resolved_path, resolved_root))
+    except ValueError:
+        # Fallback for cross-drive/path-layout edge cases: strip root so
+        # generated hooks remain portable and non-absolute.
+        return Path(*resolved_path.parts[1:]) if resolved_path.is_absolute() else resolved_path
 
 
 def _inject_section(file_path: Path, section_header: str, content: str) -> None:

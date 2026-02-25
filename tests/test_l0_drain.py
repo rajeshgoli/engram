@@ -480,3 +480,56 @@ class TestRegenerateL0Briefing:
 
         doc_paths = resolve_doc_paths(config, project)
         assert regenerate_l0_briefing(config, project, doc_paths) is False
+
+    def test_build_lookup_patterns(self, project: Path, config: dict) -> None:
+        from engram.config import resolve_doc_paths
+        from engram.server.briefing import _build_lookup_patterns
+
+        doc_paths = resolve_doc_paths(config, project)
+        patterns = _build_lookup_patterns(doc_paths, project)
+        assert patterns["concepts"] == "docs/decisions/concept_registry/current/C###.md"
+        assert patterns["epistemic_current"] == "docs/decisions/epistemic_state/current/E###.md"
+        assert patterns["epistemic_history"] == "docs/decisions/epistemic_state/history/E###.md"
+        assert patterns["workflows"] == "docs/decisions/workflow_registry/current/W###.md"
+
+    def test_lookup_patterns_stay_relative_for_external_doc_paths(self, project: Path) -> None:
+        from engram.server.briefing import _build_lookup_patterns
+
+        external_root = project.parent / "external_docs"
+        external_root.mkdir(exist_ok=True)
+        external_concepts = external_root / "concept_registry.md"
+        external_concepts.write_text("# Concept Registry\n")
+
+        doc_paths = {
+            "concepts": external_concepts,
+            "epistemic": project / "docs" / "decisions" / "epistemic_state.md",
+            "workflows": project / "docs" / "decisions" / "workflow_registry.md",
+            "timeline": project / "docs" / "decisions" / "timeline.md",
+        }
+
+        patterns = _build_lookup_patterns(doc_paths, project)
+        assert not Path(patterns["concepts"]).is_absolute()
+        assert patterns["concepts"].startswith("../")
+
+    @patch("engram.server.briefing.subprocess.run")
+    def test_generate_briefing_prompt_includes_lookup_hooks(self, mock_run: MagicMock, project: Path, config: dict) -> None:
+        from engram.server.briefing import _generate_briefing
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="Briefing")
+        lookup_patterns = {
+            "concepts": "docs/decisions/concept_registry/current/C###.md",
+            "epistemic_current": "docs/decisions/epistemic_state/current/E###.md",
+            "epistemic_history": "docs/decisions/epistemic_state/history/E###.md",
+            "workflows": "docs/decisions/workflow_registry/current/W###.md",
+        }
+
+        result = _generate_briefing(config, project, "### Timeline\nx", lookup_patterns)
+        assert result == "Briefing"
+
+        prompt = mock_run.call_args.args[0][-1]
+        assert "Lookup Hooks (Use When Needed)" in prompt
+        assert "short inline gloss" in prompt
+        assert lookup_patterns["concepts"] in prompt
+        assert lookup_patterns["epistemic_current"] in prompt
+        assert lookup_patterns["epistemic_history"] in prompt
+        assert lookup_patterns["workflows"] in prompt
