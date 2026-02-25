@@ -48,8 +48,15 @@ def regenerate_l0_briefing(
     if not living_contents:
         return False
 
+    lookup_patterns = _build_lookup_patterns(doc_paths)
+
     # Generate briefing via lightweight model call
-    briefing_text = _generate_briefing(config, project_root, "\n\n".join(living_contents))
+    briefing_text = _generate_briefing(
+        config,
+        project_root,
+        "\n\n".join(living_contents),
+        lookup_patterns,
+    )
     if not briefing_text:
         log.warning("L0 briefing generation returned empty result")
         return False
@@ -64,6 +71,7 @@ def _generate_briefing(
     config: dict[str, Any],
     project_root: Path,
     living_docs_content: str,
+    lookup_patterns: dict[str, str],
 ) -> str | None:
     """Generate L0 briefing by shelling out to a fast model.
 
@@ -73,6 +81,17 @@ def _generate_briefing(
         "Compress the following project knowledge into a concise briefing "
         "(50-100 lines). Focus on: what's alive vs dead, contested claims, "
         "key workflows, and agent guidance. Use stable IDs (C###/E###/W###).\n\n"
+        "Output requirements:\n"
+        "1) Keep the briefing self-contained: when an ID is first introduced, add a "
+        "short inline gloss so the line is understandable without opening other files.\n"
+        "2) Include a section titled 'Lookup Hooks (Use When Needed)' that tells agents "
+        "exactly which per-ID files to open for deeper context.\n"
+        "3) In Lookup Hooks, include these file patterns exactly:\n"
+        f"- Concept details: {lookup_patterns['concepts']}\n"
+        f"- Epistemic current state: {lookup_patterns['epistemic_current']}\n"
+        f"- Epistemic history/provenance: {lookup_patterns['epistemic_history']}\n"
+        f"- Workflow details: {lookup_patterns['workflows']}\n"
+        "4) Keep the briefing concise but actionable; avoid ID-only shorthand with no hook.\n\n"
         f"{living_docs_content}"
     )
 
@@ -90,6 +109,19 @@ def _generate_briefing(
         log.warning("L0 briefing generation failed")
 
     return None
+
+
+def _build_lookup_patterns(doc_paths: dict[str, Path]) -> dict[str, str]:
+    """Build per-ID file lookup patterns for L0 briefing instructions."""
+    concepts = doc_paths["concepts"].with_suffix("")
+    epistemic = doc_paths["epistemic"].with_suffix("")
+    workflows = doc_paths["workflows"].with_suffix("")
+    return {
+        "concepts": f"{concepts}/current/C###.md",
+        "epistemic_current": f"{epistemic}/current/E###.md",
+        "epistemic_history": f"{epistemic}/history/E###.md",
+        "workflows": f"{workflows}/current/W###.md",
+    }
 
 
 def _inject_section(file_path: Path, section_header: str, content: str) -> None:
