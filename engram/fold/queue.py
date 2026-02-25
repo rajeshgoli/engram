@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,13 +20,44 @@ from engram.fold.sessions import get_adapter
 from engram.fold.sources import (
     extract_issue_number,
     get_doc_git_dates,
+    infer_github_repo,
+    list_tracked_markdown_docs,
     parse_date,
     parse_frontmatter_date,
+    pull_issues,
     render_issue_markdown,
 )
 
 # Dual-pass threshold: if modified > created + this many days, create revisit entry
 REVISIT_THRESHOLD_DAYS = 7
+
+
+def refresh_issue_snapshots(config: dict[str, Any], project_root: Path) -> tuple[bool, str]:
+    """Refresh ``sources.issues`` JSON snapshots from GitHub.
+
+    Returns:
+        (ok, message) where ``ok`` indicates refresh success.
+    """
+    sources = config.get("sources", {})
+    if not sources.get("refresh_issues", True):
+        return True, "disabled by config (sources.refresh_issues: false)"
+
+    issues_dir = project_root / sources.get("issues", "local_data/issues/")
+    repo = sources.get("github_repo") or infer_github_repo(project_root)
+    if not repo:
+        return True, (
+            "unable to resolve GitHub repo (set sources.github_repo or configure "
+            "git remote.origin.url); using local issue snapshots"
+        )
+
+    try:
+        issues = pull_issues(repo, issues_dir)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        detail = f": {stderr}" if stderr else ""
+        return False, f"gh issue list failed for {repo}{detail}"
+
+    return True, f"refreshed {len(issues)} issues from {repo}"
 
 
 def build_queue(
@@ -74,57 +106,64 @@ def build_queue(
     sizes: dict[str, int] = {}
 
     # --- Process docs ---
-    for doc_dir in doc_dirs:
-        if not doc_dir.exists():
-            continue
-        for doc_path in sorted(doc_dir.glob("*.md")):
-            char_count = len(doc_path.read_text(errors="ignore"))
-            rel_path = str(doc_path.relative_to(project_root))
-            sizes[rel_path] = char_count
+    tracked_doc_paths = list_tracked_markdown_docs(project_root, doc_dirs)
+    if tracked_doc_paths:
+        doc_paths = tracked_doc_paths
+    else:
+        doc_paths = []
+        for doc_dir in doc_dirs:
+            if not doc_dir.exists():
+                continue
+            doc_paths.extend(sorted(doc_dir.glob("*.md")))
 
-            # Resolve created date (priority: frontmatter > issue > git > mtime)
-            created = parse_frontmatter_date(doc_path, project_start)
+    for doc_path in doc_paths:
+        char_count = len(doc_path.read_text(errors="ignore"))
+        rel_path = str(doc_path.relative_to(project_root))
+        sizes[rel_path] = char_count
 
-            if not created:
-                issue_num = extract_issue_number(doc_path)
-                if issue_num and issue_num in issue_dates:
-                    created = issue_dates[issue_num]
+        # Resolve created date (priority: frontmatter > issue > git > mtime)
+        created = parse_frontmatter_date(doc_path, project_start)
 
-            if not created:
-                git_created, _ = get_doc_git_dates(doc_path, project_root)
-                created = git_created
+        if not created:
+            issue_num = extract_issue_number(doc_path)
+            if issue_num and issue_num in issue_dates:
+                created = issue_dates[issue_num]
 
-            if not created:
-                mtime = os.path.getmtime(doc_path)
-                created = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+        if not created:
+            git_created, _ = get_doc_git_dates(doc_path, project_root)
+            created = git_created
 
-            # Resolve modified date
-            _, git_modified = get_doc_git_dates(doc_path, project_root)
-            modified = git_modified or created
+        if not created:
+            mtime = os.path.getmtime(doc_path)
+            created = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
 
-            created_dt = parse_date(created)
-            modified_dt = parse_date(modified)
+        # Resolve modified date
+        _, git_modified = get_doc_git_dates(doc_path, project_root)
+        modified = git_modified or created
 
-            # Always add initial entry
+        created_dt = parse_date(created)
+        modified_dt = parse_date(modified)
+
+        # Always add initial entry
+        entries.append({
+            "date": created,
+            "type": "doc",
+            "path": rel_path,
+            "chars": char_count,
+            "pass": "initial",
+        })
+
+        # Add revisit entry if substantially modified later
+        delta = (modified_dt - created_dt).days
+        if delta >= REVISIT_THRESHOLD_DAYS:
             entries.append({
-                "date": created,
+                "date": modified,
                 "type": "doc",
                 "path": rel_path,
                 "chars": char_count,
-                "pass": "initial",
+                "pass": "revisit",
+                "first_seen_date": created,
             })
-
-            # Add revisit entry if substantially modified later
-            delta = (modified_dt - created_dt).days
-            if delta >= REVISIT_THRESHOLD_DAYS:
-                entries.append({
-                    "date": modified,
-                    "type": "doc",
-                    "path": rel_path,
-                    "chars": char_count,
-                    "pass": "revisit",
-                    "first_seen_date": created,
-                })
 
     # --- Process issues ---
     if issues_dir.exists():

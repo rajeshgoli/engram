@@ -26,6 +26,8 @@ DEFAULTS: dict[str, Any] = {
     },
     "sources": {
         "issues": "local_data/issues/",
+        "refresh_issues": True,
+        "github_repo": None,
         "docs": ["docs/working/", "docs/archive/", "docs/specs/"],
         "sessions": {
             "format": "claude-code",

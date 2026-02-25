@@ -69,6 +69,8 @@ briefing:
 
 sources:
   issues: local_data/issues/
+  refresh_issues: true
+  github_repo: null  # Optional explicit owner/repo; else infer from git origin
   docs:
     - docs/working/
     - docs/archive/
@@ -161,10 +163,15 @@ def init(project_root: str) -> None:
     default=None,
     help="Only include entries on or after this date (YYYY-MM-DD).",
 )
-def build_queue_cmd(project_root: str, start_date: object) -> None:
+@click.option(
+    "--refresh-issues/--no-refresh-issues",
+    default=True,
+    help="Refresh local issue snapshots from GitHub before queue generation.",
+)
+def build_queue_cmd(project_root: str, start_date: object, refresh_issues: bool) -> None:
     """Build chronological queue of all project artifacts."""
     from engram.config import load_config
-    from engram.fold.queue import build_queue
+    from engram.fold.queue import build_queue, refresh_issue_snapshots
     from engram.server.db import ServerDB
 
     root = Path(project_root)
@@ -180,6 +187,17 @@ def build_queue_cmd(project_root: str, start_date: object) -> None:
         effective_start = fold_from
     else:
         effective_start = None
+
+    if refresh_issues:
+        refreshed, message = refresh_issue_snapshots(config, root)
+        if refreshed:
+            click.echo(f"Issue refresh: {message}")
+        else:
+            click.echo(
+                "Issue refresh failed: "
+                f"{message}. Re-run with --no-refresh-issues to use local snapshots."
+            )
+            raise SystemExit(1)
 
     entries = build_queue(config, root, start_date=effective_start)
 

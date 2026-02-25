@@ -12,6 +12,7 @@ import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
+from typing import Iterable
 
 
 def pull_issues(repo: str, issues_dir: Path) -> list[dict]:
@@ -45,6 +46,63 @@ def pull_issues(repo: str, issues_dir: Path) -> list[dict]:
         path.write_text(json.dumps(issue, indent=2))
 
     return issues
+
+
+def infer_github_repo(project_root: Path) -> str | None:
+    """Infer ``owner/repo`` from git remote.origin.url, if possible."""
+    result = subprocess.run(
+        ["git", "config", "--get", "remote.origin.url"],
+        capture_output=True,
+        text=True,
+        cwd=project_root,
+    )
+    remote_url = result.stdout.strip()
+    if not remote_url:
+        return None
+
+    match = re.search(r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?$", remote_url)
+    if not match:
+        return None
+    return f"{match.group('owner')}/{match.group('repo')}"
+
+
+def list_tracked_markdown_docs(
+    project_root: Path,
+    doc_dirs: Iterable[Path],
+) -> list[Path]:
+    """List tracked markdown files under configured doc dirs.
+
+    Returns an empty list when git metadata is unavailable.
+    """
+    rel_dirs: list[str] = []
+    for doc_dir in doc_dirs:
+        try:
+            rel_dirs.append(str(doc_dir.relative_to(project_root)))
+        except ValueError:
+            continue
+
+    if not rel_dirs:
+        return []
+
+    result = subprocess.run(
+        ["git", "ls-files", "--", *rel_dirs],
+        capture_output=True,
+        text=True,
+        cwd=project_root,
+    )
+    if result.returncode != 0:
+        return []
+
+    tracked: list[Path] = []
+    for line in result.stdout.splitlines():
+        rel_path = line.strip()
+        if not rel_path.endswith(".md"):
+            continue
+        abs_path = project_root / rel_path
+        if abs_path.exists():
+            tracked.append(abs_path)
+
+    return sorted(set(tracked))
 
 
 def render_issue_markdown(issue: dict) -> str:

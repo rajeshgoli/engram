@@ -6,6 +6,7 @@ import json
 import tempfile
 from types import SimpleNamespace
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -102,6 +103,34 @@ class TestInit:
         result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
         assert result.exit_code == 0
         assert (project_dir / "docs" / "decisions").is_dir()
+
+
+class TestBuildQueueCommand:
+    def test_fails_when_issue_refresh_fails(self, runner: CliRunner, project_dir: Path) -> None:
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        with patch("engram.fold.queue.refresh_issue_snapshots", return_value=(False, "gh auth failed")):
+            result = runner.invoke(cli, ["build-queue", "--project-root", str(project_dir)])
+
+        assert result.exit_code != 0
+        assert "Issue refresh failed: gh auth failed" in result.output
+
+    def test_no_refresh_flag_skips_issue_refresh(self, runner: CliRunner, project_dir: Path) -> None:
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        with (
+            patch("engram.fold.queue.refresh_issue_snapshots") as mock_refresh,
+            patch("engram.fold.queue.build_queue", return_value=[]),
+        ):
+            result = runner.invoke(
+                cli,
+                ["build-queue", "--project-root", str(project_dir), "--no-refresh-issues"],
+            )
+
+        assert result.exit_code == 0
+        mock_refresh.assert_not_called()
 
 
 class TestMigrateEpistemicHistory:
