@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from engram.linter.guards import (
+    check_fold_chunk_delta_documentation,
     check_diff_size,
     check_id_compliance,
     check_missing_sections,
@@ -93,6 +94,7 @@ def lint_post_dispatch(
     expected_growth: int = 0,
     config: dict[str, Any] | None = None,
     project_root: Path | None = None,
+    chunk_type: str | None = None,
 ) -> LintResult:
     """Full post-dispatch validation: schema + refs + guards.
 
@@ -130,6 +132,8 @@ def lint_post_dispatch(
         violations.extend(check_diff_size(before_total, after_total, expected_growth))
 
     violations.extend(check_missing_sections(before_contents, after_contents))
+    if chunk_type == "fold":
+        violations.extend(check_fold_chunk_delta_documentation(before_contents, after_contents))
 
     if pre_assigned_ids:
         violations.extend(check_id_compliance(

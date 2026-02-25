@@ -56,6 +56,8 @@ def refresh_issue_snapshots(config: dict[str, Any], project_root: Path) -> tuple
         stderr = (exc.stderr or "").strip()
         detail = f": {stderr}" if stderr else ""
         return False, f"gh issue list failed for {repo}{detail}"
+    except FileNotFoundError:
+        return False, "gh CLI not found while refreshing issues"
 
     return True, f"refreshed {len(issues)} issues from {repo}"
 

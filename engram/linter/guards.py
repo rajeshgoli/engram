@@ -78,6 +78,48 @@ def check_missing_sections(
     return violations
 
 
+def check_fold_chunk_delta_documentation(
+    before_contents: dict[str, str],
+    after_contents: dict[str, str],
+) -> list[Violation]:
+    """Require explicit no-op documentation for normal fold chunks.
+
+    Rules for ``chunk_type == "fold"``:
+    - At least one living doc must change.
+    - If concepts/epistemic/workflows are unchanged, timeline must add
+      an explicit ``No canonical delta`` marker.
+    """
+    changed_docs = [
+        key for key in ("concepts", "epistemic", "workflows", "timeline")
+        if before_contents.get(key, "") != after_contents.get(key, "")
+    ]
+    if not changed_docs:
+        return [Violation(
+            "guard", None,
+            "Fold chunk produced no living-doc changes. Add canonical updates "
+            "or append a timeline phase documenting 'No canonical delta'.",
+        )]
+
+    ce_w_changed = any(
+        before_contents.get(key, "") != after_contents.get(key, "")
+        for key in ("concepts", "epistemic", "workflows")
+    )
+    if ce_w_changed:
+        return []
+
+    before_timeline = before_contents.get("timeline", "")
+    after_timeline = after_contents.get("timeline", "")
+    marker = "no canonical delta"
+    if after_timeline.lower().count(marker) <= before_timeline.lower().count(marker):
+        return [Violation(
+            "timeline", None,
+            "Timeline-only fold chunk must add explicit 'No canonical delta' "
+            "documentation when C/E/W registries are unchanged.",
+        )]
+
+    return []
+
+
 def check_id_compliance(
     after_contents: dict[str, str],
     pre_assigned_ids: list[str],

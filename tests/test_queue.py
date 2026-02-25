@@ -545,6 +545,15 @@ class TestIssueRefresh:
         assert ok is False
         assert "gh issue list failed for owner/repo" in message
 
+    def test_refresh_returns_failure_when_gh_missing(self, project: Path) -> None:
+        config = _make_config(project, {"sources": {"github_repo": "owner/repo"}})
+
+        with patch("engram.fold.queue.pull_issues", side_effect=FileNotFoundError("gh")):
+            ok, message = refresh_issue_snapshots(config, project)
+
+        assert ok is False
+        assert "gh CLI not found" in message
+
 
 class TestGitTrackedDocDiscovery:
     def test_prefers_git_tracked_docs_when_available(self, project: Path) -> None:

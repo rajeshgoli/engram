@@ -84,6 +84,7 @@ def _dispatch_and_validate(
             expected_growth=chunk.chunk_chars,
             config=config,
             project_root=project_root,
+            chunk_type=chunk.chunk_type,
         )
 
         if result.passed:
