@@ -474,7 +474,7 @@ class TestActiveChunkLock:
         cli_module._enforce_single_active_chunk(project_dir)
         assert not lock_path.exists()
 
-    def test_auto_clear_does_not_match_fold_chunk_substring(self, project_dir: Path, monkeypatch) -> None:
+    def test_auto_clear_ignores_non_subject_mentions_of_fold_chunk(self, project_dir: Path, monkeypatch) -> None:
         from datetime import datetime, timezone
         import subprocess
         from engram import cli as cli_module
