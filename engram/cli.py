@@ -458,7 +458,11 @@ def _enforce_single_active_chunk(project_root: Path) -> None:
             except ValueError:
                 continue
 
-        if re.search(rf"Knowledge fold: chunk(?:_| )0*{chunk_id}\b", subjects):
+        chunk_patterns = (
+            rf"Knowledge fold:\s*chunk(?:_| )0*{chunk_id}\b",
+            rf"Fold chunk(?:_| )0*{chunk_id}\b",
+        )
+        if any(re.search(pattern, subjects, flags=re.IGNORECASE) for pattern in chunk_patterns):
             _cleanup_chunk_context_from_lock(project_root, lock)
             lock_path.unlink()
             return

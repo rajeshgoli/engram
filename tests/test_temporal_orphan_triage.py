@@ -310,6 +310,60 @@ class TestTemporalOrphanDetection:
         assert len(orphans) == 1
         assert orphans[0]["id"] == "C001"
 
+    def test_skips_concepts_introduced_after_ref_commit(self, tmp_path: Path) -> None:
+        """Temporal orphan scan ignores ACTIVE concepts absent at fold reference."""
+        from engram.fold.chunker import _find_orphaned_concepts
+
+        docs = tmp_path / "docs" / "decisions"
+        docs.mkdir(parents=True)
+        registry = docs / "concept_registry.md"
+        registry.write_text(
+            "# Concept Registry\n\n"
+            "## C001: Legacy concept (ACTIVE)\n"
+            "- **Code:** `src/legacy.py`\n",
+        )
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "legacy.py").write_text("# legacy")
+        commit = _init_git_repo(
+            tmp_path,
+            files=["docs/decisions/concept_registry.md", "src/legacy.py"],
+        )
+
+        # Add a new concept after the ref commit that points at non-existent paths.
+        registry.write_text(
+            "# Concept Registry\n\n"
+            "## C001: Legacy concept (ACTIVE)\n"
+            "- **Code:** `src/legacy.py`\n\n"
+            "## C002: New concept (ACTIVE)\n"
+            "- **Code:** `docs/working/never_existed.md`\n",
+        )
+
+        orphans = _find_orphaned_concepts(registry, tmp_path, ref_commit=commit)
+        assert all(o["id"] != "C002" for o in orphans)
+
+    def test_ref_commit_lookup_is_case_insensitive(self, tmp_path: Path) -> None:
+        """Temporal checks resolve paths despite docs/Docs casing drift."""
+        from engram.fold.chunker import _find_orphaned_concepts
+
+        docs = tmp_path / "Docs" / "Archive"
+        docs.mkdir(parents=True)
+        (docs / "DAG_spec.md").write_text("legacy")
+        registry_dir = tmp_path / "docs" / "decisions"
+        registry_dir.mkdir(parents=True)
+        registry = registry_dir / "concept_registry.md"
+        registry.write_text(
+            "# Concept Registry\n\n"
+            "## C001: Legacy docs case (ACTIVE)\n"
+            "- **Code:** `docs/archive/DAG_spec.md`\n",
+        )
+        commit = _init_git_repo(
+            tmp_path,
+            files=["Docs/Archive/DAG_spec.md", "docs/decisions/concept_registry.md"],
+        )
+
+        orphans = _find_orphaned_concepts(registry, tmp_path, ref_commit=commit)
+        assert orphans == []
+
 
 # ==================================================================
 # 6. scan_drift threading

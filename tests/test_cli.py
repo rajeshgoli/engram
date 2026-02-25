@@ -431,3 +431,44 @@ class TestActiveChunkLock:
 
         cli_module._enforce_single_active_chunk(project_dir)
         assert not lock_path.exists()
+
+    def test_auto_clear_accepts_fold_chunk_commit_subject(self, project_dir: Path, monkeypatch) -> None:
+        from datetime import datetime, timezone
+        import subprocess
+        from engram import cli as cli_module
+
+        (project_dir / ".engram").mkdir(parents=True, exist_ok=True)
+        lock_path = project_dir / ".engram" / "active_chunk.yaml"
+        created_at = "2026-01-01T00:00:05Z"
+        created_epoch = int(
+            datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            .astimezone(timezone.utc)
+            .timestamp(),
+        )
+        lock_path.write_text(
+            yaml.safe_dump(
+                {
+                    "chunk_id": 34,
+                    "created_at": created_at,
+                    "input_path": "dummy.md",
+                },
+                sort_keys=True,
+            ),
+        )
+
+        class DummyProc:
+            def __init__(self, returncode: int = 0, stdout: str = "") -> None:
+                self.returncode = returncode
+                self.stdout = stdout
+
+        def fake_run(args, cwd=None, capture_output=False, text=False, check=False):  # noqa: ANN001
+            if args[:3] == ["git", "rev-parse", "--is-inside-work-tree"]:
+                return DummyProc(returncode=0, stdout="true\n")
+            if args[:4] == ["git", "log", "-n", "200"]:
+                return DummyProc(returncode=0, stdout=f"{created_epoch}\tFold chunk 34: details\n")
+            raise AssertionError(f"Unexpected subprocess args: {args}")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        cli_module._enforce_single_active_chunk(project_dir)
+        assert not lock_path.exists()
