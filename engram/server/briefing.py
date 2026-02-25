@@ -48,7 +48,7 @@ def regenerate_l0_briefing(
     if not living_contents:
         return False
 
-    lookup_patterns = _build_lookup_patterns(doc_paths)
+    lookup_patterns = _build_lookup_patterns(doc_paths, project_root)
 
     # Generate briefing via lightweight model call
     briefing_text = _generate_briefing(
@@ -111,17 +111,25 @@ def _generate_briefing(
     return None
 
 
-def _build_lookup_patterns(doc_paths: dict[str, Path]) -> dict[str, str]:
+def _build_lookup_patterns(doc_paths: dict[str, Path], project_root: Path) -> dict[str, str]:
     """Build per-ID file lookup patterns for L0 briefing instructions."""
-    concepts = doc_paths["concepts"].with_suffix("")
-    epistemic = doc_paths["epistemic"].with_suffix("")
-    workflows = doc_paths["workflows"].with_suffix("")
+    concepts = _to_repo_relative(doc_paths["concepts"], project_root).with_suffix("")
+    epistemic = _to_repo_relative(doc_paths["epistemic"], project_root).with_suffix("")
+    workflows = _to_repo_relative(doc_paths["workflows"], project_root).with_suffix("")
     return {
         "concepts": f"{concepts}/current/C###.md",
         "epistemic_current": f"{epistemic}/current/E###.md",
         "epistemic_history": f"{epistemic}/history/E###.md",
         "workflows": f"{workflows}/current/W###.md",
     }
+
+
+def _to_repo_relative(path: Path, project_root: Path) -> Path:
+    """Return path relative to project root when possible."""
+    try:
+        return path.resolve().relative_to(project_root.resolve())
+    except ValueError:
+        return path
 
 
 def _inject_section(file_path: Path, section_header: str, content: str) -> None:

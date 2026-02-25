@@ -486,11 +486,11 @@ class TestRegenerateL0Briefing:
         from engram.server.briefing import _build_lookup_patterns
 
         doc_paths = resolve_doc_paths(config, project)
-        patterns = _build_lookup_patterns(doc_paths)
-        assert patterns["concepts"].endswith("docs/decisions/concept_registry/current/C###.md")
-        assert patterns["epistemic_current"].endswith("docs/decisions/epistemic_state/current/E###.md")
-        assert patterns["epistemic_history"].endswith("docs/decisions/epistemic_state/history/E###.md")
-        assert patterns["workflows"].endswith("docs/decisions/workflow_registry/current/W###.md")
+        patterns = _build_lookup_patterns(doc_paths, project)
+        assert patterns["concepts"] == "docs/decisions/concept_registry/current/C###.md"
+        assert patterns["epistemic_current"] == "docs/decisions/epistemic_state/current/E###.md"
+        assert patterns["epistemic_history"] == "docs/decisions/epistemic_state/history/E###.md"
+        assert patterns["workflows"] == "docs/decisions/workflow_registry/current/W###.md"
 
     @patch("engram.server.briefing.subprocess.run")
     def test_generate_briefing_prompt_includes_lookup_hooks(self, mock_run: MagicMock, project: Path, config: dict) -> None:
