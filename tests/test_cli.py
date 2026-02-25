@@ -474,7 +474,7 @@ class TestActiveChunkLock:
         cli_module._enforce_single_active_chunk(project_dir)
         assert not lock_path.exists()
 
-    def test_auto_clear_does_not_match_fold_chunk_substring(self, project_dir: Path, monkeypatch) -> None:
+    def test_auto_clear_ignores_non_subject_mentions_of_fold_chunk(self, project_dir: Path, monkeypatch) -> None:
         from datetime import datetime, timezone
         import subprocess
         from engram import cli as cli_module
@@ -507,7 +507,10 @@ class TestActiveChunkLock:
             if args[:3] == ["git", "rev-parse", "--is-inside-work-tree"]:
                 return DummyProc(returncode=0, stdout="true\n")
             if args[:4] == ["git", "log", "-n", "200"]:
-                return DummyProc(returncode=0, stdout=f"{created_epoch}\tScaffold chunk 34 cleanup\n")
+                return DummyProc(
+                    returncode=0,
+                    stdout=f"{created_epoch}\tDocs: guidance for Fold chunk 34 lock handling\n",
+                )
             raise AssertionError(f"Unexpected subprocess args: {args}")
 
         monkeypatch.setattr(subprocess, "run", fake_run)
