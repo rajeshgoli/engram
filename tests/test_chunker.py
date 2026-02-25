@@ -217,6 +217,25 @@ class TestExtractCodePaths:
         text = "## C001: foo (ACTIVE)\n- **Issues:** #42\n"
         assert _extract_code_paths(text) == []
 
+    def test_expands_brace_paths(self):
+        text = "- **Code:** docs/archive/{a,b}.md, src/router/{x, y}.py\n"
+        assert _extract_code_paths(text) == [
+            "docs/archive/a.md",
+            "docs/archive/b.md",
+            "src/router/x.py",
+            "src/router/y.py",
+        ]
+
+    def test_splits_top_level_commas_only(self):
+        text = "- **Code:** src/replay_server/routers/{annotate,user,screenshots,dag}.py, scripts/run.py\n"
+        assert _extract_code_paths(text) == [
+            "src/replay_server/routers/annotate.py",
+            "src/replay_server/routers/user.py",
+            "src/replay_server/routers/screenshots.py",
+            "src/replay_server/routers/dag.py",
+            "scripts/run.py",
+        ]
+
 
 # ------------------------------------------------------------------
 # Orphan detection
@@ -1275,6 +1294,32 @@ class TestRenderItemContent:
         result = _render_item_content(item, project)
         assert "[USER PROMPTS] Session (5 prompts)" in result
         assert "do the thing" in result
+
+    def test_prompts_item_compacts_sm_noise(self, project):
+        session_dir = project / ".engram" / "sessions"
+        session_dir.mkdir(parents=True, exist_ok=True)
+        (session_dir / "abc123.md").write_text(
+            "**[10:00]** [sm wait] worker idle\n\n"
+            "**[10:01]** user decision text\n\n"
+            "**[10:02]** [Input from: architect] " + ("x" * 500) + "\n\n"
+            "**[10:03]** user decision text\n\n",
+        )
+
+        item = {
+            "date": "2025-05-01T00:00:00",
+            "type": "prompts",
+            "path": ".engram/sessions/abc123.md",
+            "chars": 100,
+            "pass": "initial",
+            "session_id": "abc123",
+            "prompt_count": 4,
+        }
+        result = _render_item_content(item, project)
+        assert "[sm wait]" not in result
+        assert "user decision text" in result
+        assert result.count("user decision text") == 2
+        assert "[Input from: architect]" in result
+        assert "..." in result
 
 
 # ------------------------------------------------------------------

@@ -16,6 +16,9 @@ from typing import Any
 
 # Minimum prompt length to include (filters slash commands and trivial inputs)
 MIN_PROMPT_CHARS = 25
+_SM_TELEMETRY_RE = re.compile(r"^\[sm[^\]]*\]", re.IGNORECASE)
+_RELAY_RE = re.compile(r"^\[input from:[^\]]+\]", re.IGNORECASE)
+_RELAY_MAX_CHARS = 320
 
 
 class SessionEntry:
@@ -265,8 +268,25 @@ def _build_session_entries(
         if not prompts:
             continue
         prompts.sort(key=lambda p: p.get("timestamp", 0))
-        rendered = _render_session_markdown(prompts)
-        first_ts = prompts[0].get("timestamp", 0)
+        filtered_prompts: list[dict[str, Any]] = []
+        last_text: str | None = None
+        for prompt in prompts:
+            text_raw = prompt.get("display", "")
+            if not isinstance(text_raw, str):
+                continue
+            normalized = _normalize_prompt_text(text_raw)
+            if not normalized:
+                continue
+            if normalized == last_text:
+                continue
+            filtered_prompts.append({**prompt, "display": normalized})
+            last_text = normalized
+
+        if not filtered_prompts:
+            continue
+
+        rendered = _render_session_markdown(filtered_prompts)
+        first_ts = filtered_prompts[0].get("timestamp", 0)
         session_date = datetime.fromtimestamp(
             first_ts / 1000, tz=timezone.utc,
         ).isoformat()
@@ -274,10 +294,29 @@ def _build_session_entries(
             session_id=session_id,
             date=session_date,
             chars=len(rendered),
-            prompt_count=len(prompts),
+            prompt_count=len(filtered_prompts),
             rendered=rendered,
         ))
     return entries
+
+
+def _normalize_prompt_text(text: str) -> str:
+    """Normalize session prompt text for fold consumption.
+
+    - Drops pure ``[sm ...]`` telemetry lines.
+    - Collapses multiline prompts to one line.
+    - Trims long relay blocks (``[Input from: ...]``).
+    """
+    normalized = " ".join(line.strip() for line in text.splitlines() if line.strip())
+    if not normalized:
+        return ""
+    if _SM_TELEMETRY_RE.match(normalized):
+        return ""
+    if _RELAY_RE.match(normalized) and len(normalized) > _RELAY_MAX_CHARS:
+        clipped = normalized[: _RELAY_MAX_CHARS - 3]
+        clipped = clipped.rsplit(" ", 1)[0]
+        return clipped + "..."
+    return normalized
 
 
 def _codex_ts_to_ms(raw: Any) -> int | None:

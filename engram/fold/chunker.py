@@ -16,6 +16,7 @@ import tempfile
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -92,6 +93,10 @@ _WORKFLOW_EXPLICIT_SIGNAL_TERMS = (
     "playbook",
 )
 _STABLE_ID_RE = re.compile(r"\b([CEW])(\d{3,})\b", re.IGNORECASE)
+_SESSION_PROMPT_LINE_RE = re.compile(r"^\*\*\[(\d{2}:\d{2})\]\*\*\s+(.*)$")
+_SESSION_SM_PROMPT_RE = re.compile(r"^\[sm[^\]]*\]", re.IGNORECASE)
+_SESSION_RELAY_PROMPT_RE = re.compile(r"^\[input from:[^\]]+\]", re.IGNORECASE)
+_SESSION_RELAY_MAX_CHARS = 320
 
 
 @dataclass
@@ -189,11 +194,62 @@ def _extract_code_paths(section_text: str) -> list[str]:
         # Everything after "Code:" is the value
         _, _, val = stripped.partition(":**")
         val = val.strip()
-        for p in val.split(","):
-            p = p.strip().strip("`").strip()
-            if p:
-                paths.append(p)
+        for token in _split_code_field_values(val):
+            expanded = _expand_braced_path(token)
+            for p in expanded:
+                cleaned = p.strip().strip("`").strip()
+                if not cleaned or "..." in cleaned:
+                    continue
+                if cleaned.startswith("./"):
+                    cleaned = cleaned[2:]
+                paths.append(cleaned)
     return paths
+
+
+def _split_code_field_values(raw: str) -> list[str]:
+    """Split a Code field by top-level commas (ignoring commas inside braces)."""
+    values: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for ch in raw:
+        if ch == "{":
+            depth += 1
+            current.append(ch)
+            continue
+        if ch == "}":
+            depth = max(0, depth - 1)
+            current.append(ch)
+            continue
+        if ch == "," and depth == 0:
+            part = "".join(current).strip()
+            if part:
+                values.append(part)
+            current = []
+            continue
+        current.append(ch)
+    part = "".join(current).strip()
+    if part:
+        values.append(part)
+    return values
+
+
+def _expand_braced_path(token: str) -> list[str]:
+    """Expand a single-level brace expression in a code path token."""
+    start = token.find("{")
+    end = token.find("}", start + 1) if start != -1 else -1
+    if start == -1 or end == -1 or end < start:
+        return [token]
+    prefix = token[:start]
+    suffix = token[end + 1:]
+    inner = token[start + 1:end]
+    if not inner:
+        return [token]
+    expanded: list[str] = []
+    for value in inner.split(","):
+        value = value.strip()
+        if value:
+            expanded.append(f"{prefix}{value}{suffix}")
+    return expanded or [token]
 
 
 def _resolve_ref_commit(project_root: Path, fold_from: str) -> str | None:
@@ -343,20 +399,92 @@ def _file_exists_at_commit(
 ) -> bool:
     """Check if a file exists at a specific git commit.
 
-    Uses ``git ls-tree <commit> -- <path>`` — exit code 0 with output
-    means the file exists.
+    Uses a cached ``git ls-tree -r --name-only`` lookup and case-insensitive
+    matching to tolerate historical path casing drift (e.g., ``Docs/`` vs
+    ``docs/`` in older commits).
     """
+    raw = path.strip().replace("\\", "/")
+    if not raw:
+        return False
+    if raw.startswith("./"):
+        raw = raw[2:]
+    raw = raw.rstrip("/")
+    lookup = _tracked_paths_lookup_at_commit(str(project_root), ref_commit)
+    return raw.lower() in lookup
+
+
+@lru_cache(maxsize=16)
+def _tracked_paths_lookup_at_commit(
+    project_root: str,
+    ref_commit: str,
+) -> dict[str, str]:
+    """Return case-insensitive path lookup for all tracked files at commit."""
     try:
         result = subprocess.run(
-            ["git", "ls-tree", ref_commit, "--", path],
+            ["git", "ls-tree", "-r", "--name-only", ref_commit],
+            capture_output=True,
+            text=True,
+            cwd=project_root,
+            timeout=20,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return {}
+    if result.returncode != 0:
+        return {}
+
+    lookup: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        path = line.strip()
+        if not path:
+            continue
+        lookup.setdefault(path.lower(), path)
+        parts = [part for part in path.split("/") if part]
+        for idx in range(1, len(parts)):
+            parent = "/".join(parts[:idx])
+            lookup.setdefault(parent.lower(), parent)
+    return lookup
+
+
+def _active_concept_ids_at_commit(
+    project_root: Path,
+    ref_commit: str,
+    concepts_path: Path,
+) -> set[str] | None:
+    """Return ACTIVE concept IDs present in the concept registry at ref commit."""
+    try:
+        rel_path = concepts_path.relative_to(project_root).as_posix()
+    except ValueError:
+        return None
+
+    lookup = _tracked_paths_lookup_at_commit(str(project_root), ref_commit)
+    matched = lookup.get(rel_path.lower())
+    if not matched:
+        return None
+
+    try:
+        result = subprocess.run(
+            ["git", "show", f"{ref_commit}:{matched}"],
             capture_output=True,
             text=True,
             cwd=str(project_root),
             timeout=10,
         )
-        return result.returncode == 0 and bool(result.stdout.strip())
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+        return None
+    if result.returncode != 0:
+        return None
+
+    ids: set[str] = set()
+    for sec in parse_sections(result.stdout):
+        heading = sec.get("heading", "")
+        if "(ACTIVE" not in heading.upper():
+            continue
+        if is_stub(heading):
+            continue
+        entry_id = extract_id(heading)
+        if entry_id:
+            ids.add(entry_id)
+    return ids
 
 
 def _find_orphaned_concepts(
@@ -374,6 +502,11 @@ def _find_orphaned_concepts(
     if not concepts_path.exists():
         return []
     sections = parse_sections(concepts_path.read_text())
+    ref_active_ids = (
+        _active_concept_ids_at_commit(project_root, ref_commit, concepts_path)
+        if ref_commit
+        else None
+    )
     orphans: list[dict] = []
     for sec in sections:
         # ACTIVE is not in parse.STATUS_RE, so sec["status"] is None for
@@ -381,6 +514,10 @@ def _find_orphaned_concepts(
         if "(ACTIVE" not in sec["heading"].upper():
             continue
         if is_stub(sec["heading"]):
+            continue
+        entry_id = extract_id(sec["heading"])
+        if ref_active_ids is not None and entry_id and entry_id not in ref_active_ids:
+            # Concept introduced after the fold reference snapshot.
             continue
         code_paths = _extract_code_paths(sec["text"])
         if not code_paths:
@@ -399,7 +536,7 @@ def _find_orphaned_concepts(
         if all_missing:
             orphans.append({
                 "name": sec["heading"].lstrip("#").strip(),
-                "id": extract_id(sec["heading"]),
+                "id": entry_id,
                 "paths": code_paths,
             })
     return orphans
@@ -1271,7 +1408,44 @@ def _render_item_content(item: dict[str, Any], project_root: Path) -> str:
     except FileNotFoundError:
         content = f"[FILE NOT FOUND: {item_path}]\n"
 
+    if item["type"] == "prompts":
+        content = _compact_prompt_markdown(content)
+
     return header + content + "\n\n---\n\n"
+
+
+def _compact_prompt_markdown(content: str) -> str:
+    """Reduce prompt-session noise for chunk inputs.
+
+    Drops ``[sm ...]`` telemetry lines, trims long relay lines, and removes
+    consecutive duplicate prompt texts in legacy session markdown files.
+    """
+    lines: list[str] = []
+    last_prompt_text: str | None = None
+
+    for raw_line in content.splitlines():
+        line = raw_line.rstrip()
+        match = _SESSION_PROMPT_LINE_RE.match(line.strip())
+        if not match:
+            if line.strip():
+                lines.append(line)
+            continue
+
+        ts = match.group(1)
+        text = match.group(2).strip()
+        if _SESSION_SM_PROMPT_RE.match(text):
+            continue
+        if _SESSION_RELAY_PROMPT_RE.match(text) and len(text) > _SESSION_RELAY_MAX_CHARS:
+            clipped = text[: _SESSION_RELAY_MAX_CHARS - 3].rsplit(" ", 1)[0]
+            text = clipped + "..."
+        if text == last_prompt_text:
+            continue
+
+        lines.append(f"**[{ts}]** {text}")
+        lines.append("")
+        last_prompt_text = text
+
+    return "\n".join(lines).strip() + "\n"
 
 
 # ------------------------------------------------------------------

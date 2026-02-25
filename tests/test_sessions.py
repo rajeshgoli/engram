@@ -214,6 +214,56 @@ class TestClaudeCodeAdapter:
         assert second_entries[0].session_id == "sess-002"
         assert second_offset > offset
 
+    def test_filters_sm_telemetry_and_dedupes_consecutive_prompts(self, tmp_path: Path) -> None:
+        now_ms = int(time.time() * 1000)
+        path = tmp_path / "history.jsonl"
+        with open(path, "w") as fh:
+            fh.write(json.dumps({
+                "sessionId": "s1",
+                "project": "/Users/dev/my-project",
+                "display": "[sm wait] worker idle for 500s and still waiting",
+                "timestamp": now_ms,
+            }) + "\n")
+            fh.write(json.dumps({
+                "sessionId": "s1",
+                "project": "/Users/dev/my-project",
+                "display": "Real decision text that should be preserved",
+                "timestamp": now_ms + 1,
+            }) + "\n")
+            fh.write(json.dumps({
+                "sessionId": "s1",
+                "project": "/Users/dev/my-project",
+                "display": "Real decision text that should be preserved",
+                "timestamp": now_ms + 2,
+            }) + "\n")
+
+        adapter = ClaudeCodeAdapter()
+        entries = adapter.parse(path, project_match=["my-project"])
+        assert len(entries) == 1
+        rendered = entries[0].rendered
+        assert "[sm wait]" not in rendered
+        assert rendered.count("Real decision text that should be preserved") == 1
+        assert entries[0].prompt_count == 1
+
+    def test_trims_long_relay_prompts(self, tmp_path: Path) -> None:
+        now_ms = int(time.time() * 1000)
+        path = tmp_path / "history.jsonl"
+        relay = "[Input from: architect] " + ("x" * 600)
+        with open(path, "w") as fh:
+            fh.write(json.dumps({
+                "sessionId": "s1",
+                "project": "/Users/dev/my-project",
+                "display": relay,
+                "timestamp": now_ms,
+            }) + "\n")
+
+        adapter = ClaudeCodeAdapter()
+        entries = adapter.parse(path, project_match=["my-project"])
+        assert len(entries) == 1
+        rendered = entries[0].rendered
+        assert "[Input from: architect]" in rendered
+        assert "..." in rendered
+
 
 class TestCodexAdapter:
     def test_nonexistent_file(self, tmp_path: Path) -> None:
