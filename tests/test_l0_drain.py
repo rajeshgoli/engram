@@ -492,6 +492,25 @@ class TestRegenerateL0Briefing:
         assert patterns["epistemic_history"] == "docs/decisions/epistemic_state/history/E###.md"
         assert patterns["workflows"] == "docs/decisions/workflow_registry/current/W###.md"
 
+    def test_lookup_patterns_stay_relative_for_external_doc_paths(self, project: Path) -> None:
+        from engram.server.briefing import _build_lookup_patterns
+
+        external_root = project.parent / "external_docs"
+        external_root.mkdir(exist_ok=True)
+        external_concepts = external_root / "concept_registry.md"
+        external_concepts.write_text("# Concept Registry\n")
+
+        doc_paths = {
+            "concepts": external_concepts,
+            "epistemic": project / "docs" / "decisions" / "epistemic_state.md",
+            "workflows": project / "docs" / "decisions" / "workflow_registry.md",
+            "timeline": project / "docs" / "decisions" / "timeline.md",
+        }
+
+        patterns = _build_lookup_patterns(doc_paths, project)
+        assert not Path(patterns["concepts"]).is_absolute()
+        assert patterns["concepts"].startswith("../")
+
     @patch("engram.server.briefing.subprocess.run")
     def test_generate_briefing_prompt_includes_lookup_hooks(self, mock_run: MagicMock, project: Path, config: dict) -> None:
         from engram.server.briefing import _generate_briefing

@@ -7,6 +7,7 @@ can regenerate the briefing without instantiating a Dispatcher.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -126,10 +127,14 @@ def _build_lookup_patterns(doc_paths: dict[str, Path], project_root: Path) -> di
 
 def _to_repo_relative(path: Path, project_root: Path) -> Path:
     """Return path relative to project root when possible."""
+    resolved_path = path.resolve()
+    resolved_root = project_root.resolve()
     try:
-        return path.resolve().relative_to(project_root.resolve())
+        return Path(os.path.relpath(resolved_path, resolved_root))
     except ValueError:
-        return path
+        # Fallback for cross-drive/path-layout edge cases: strip root so
+        # generated hooks remain portable and non-absolute.
+        return Path(*resolved_path.parts[1:]) if resolved_path.is_absolute() else resolved_path
 
 
 def _inject_section(file_path: Path, section_header: str, content: str) -> None:
