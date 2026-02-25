@@ -995,6 +995,45 @@ class TestLintPostDispatch:
         assert any("C099" in v.message and "Agent-invented" in v.message
                     for v in result.violations)
 
+    def test_fold_chunk_no_changes_is_flagged(self) -> None:
+        before = {"concepts": "", "epistemic": "", "workflows": "", "timeline": ""}
+        after = {"concepts": "", "epistemic": "", "workflows": "", "timeline": ""}
+        result = lint_post_dispatch(before, after, chunk_type="fold")
+        assert not result.passed
+        assert any("no living-doc changes" in v.message for v in result.violations)
+
+    def test_fold_timeline_only_change_requires_no_canonical_delta_marker(self) -> None:
+        before = {
+            "concepts": "## C001: a (ACTIVE)\n- **Code:** `f.py`\n- **Issues:** #1\n- **Rationale:** documented\n- **Debt:** none\n- **Relationships:** E001, W001\n",
+            "epistemic": "## E001: x (believed)\n**Current position:** yes.\n**Evidence:** validated in issue #1.\n**Agent guidance:** keep.\n",
+            "workflows": "## W001: flow (CURRENT)\n- **Context:** ctx\n- **Trigger:** trig\n",
+            "timeline": "# Timeline\n\n## Phase: Baseline\nIDs: C001, E001, W001\n- Seed.\n",
+        }
+        after = dict(before)
+        after["timeline"] = (
+            "# Timeline\n\n## Phase: Baseline\nIDs: C001, E001, W001\n- Seed.\n\n"
+            "## Phase: Follow-up\nIDs: NONE(maintenance)\n- Checked and retained.\n"
+        )
+        result = lint_post_dispatch(before, after, chunk_type="fold")
+        assert not result.passed
+        assert any("No canonical delta" in v.message for v in result.violations)
+
+    def test_fold_timeline_only_change_with_no_canonical_delta_marker_passes(self) -> None:
+        before = {
+            "concepts": "## C001: a (ACTIVE)\n- **Code:** `f.py`\n- **Issues:** #1\n- **Rationale:** documented\n- **Debt:** none\n- **Relationships:** E001, W001\n",
+            "epistemic": "## E001: x (believed)\n**Current position:** yes.\n**Evidence:** validated in issue #1.\n**Agent guidance:** keep.\n",
+            "workflows": "## W001: flow (CURRENT)\n- **Context:** ctx\n- **Trigger:** trig\n",
+            "timeline": "# Timeline\n\n## Phase: Baseline\nIDs: C001, E001, W001\n- Seed.\n",
+        }
+        after = dict(before)
+        after["timeline"] = (
+            "# Timeline\n\n## Phase: Baseline\nIDs: C001, E001, W001\n- Seed.\n\n"
+            "## Phase: No-op maintenance\nIDs: NONE(no canonical delta: repeated artifact)\n"
+            "- No canonical delta; evidence repeated previously folded decisions.\n"
+        )
+        result = lint_post_dispatch(before, after, chunk_type="fold")
+        assert result.passed, f"Unexpected violations: {result.violations}"
+
 
 # ======================================================================
 # Violation object

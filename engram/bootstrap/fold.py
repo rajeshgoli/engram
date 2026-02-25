@@ -20,7 +20,7 @@ from typing import Any
 from engram.config import load_config, resolve_doc_paths
 from engram.dispatch import invoke_agent, read_docs
 from engram.fold.chunker import ChunkResult, cleanup_chunk_context_worktree, next_chunk
-from engram.fold.queue import build_queue
+from engram.fold.queue import build_queue, refresh_issue_snapshots
 from engram.linter import lint_post_dispatch
 from engram.server.briefing import regenerate_l0_briefing
 from engram.server.db import ServerDB
@@ -84,6 +84,7 @@ def _dispatch_and_validate(
             expected_growth=chunk.chunk_chars,
             config=config,
             project_root=project_root,
+            chunk_type=chunk.chunk_type,
         )
 
         if result.passed:
@@ -134,6 +135,12 @@ def forward_fold(
     """
     if config is None:
         config = load_config(project_root)
+
+    refreshed, refresh_message = refresh_issue_snapshots(config, project_root)
+    if not refreshed:
+        log.error("Issue refresh failed: %s", refresh_message)
+        return False
+    log.info("Issue refresh: %s", refresh_message)
 
     # Step 1: Build queue (filtered by from_date)
     log.info("Building queue...")

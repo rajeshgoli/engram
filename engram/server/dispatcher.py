@@ -155,6 +155,7 @@ class Dispatcher:
                 expected_growth=chunk.chunk_chars,
                 config=self._config,
                 project_root=self._project_root,
+                chunk_type=chunk.chunk_type,
             )
 
             if result.passed:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -12,7 +13,7 @@ import pytest
 import yaml
 
 from engram.config import DEFAULTS, _deep_merge
-from engram.fold.queue import REVISIT_THRESHOLD_DAYS, build_queue
+from engram.fold.queue import REVISIT_THRESHOLD_DAYS, build_queue, refresh_issue_snapshots
 
 
 @pytest.fixture
@@ -507,3 +508,67 @@ class TestBuildQueueStartDate:
         # Only surviving session file should exist
         assert (sessions_dir / "new-session.md").exists()
         assert not (sessions_dir / "old-session.md").exists()
+
+
+class TestIssueRefresh:
+    def test_refresh_uses_explicit_repo(self, project: Path) -> None:
+        config = _make_config(project, {"sources": {"github_repo": "owner/repo"}})
+
+        with patch("engram.fold.queue.pull_issues", return_value=[{"number": 1}]) as mock_pull:
+            ok, message = refresh_issue_snapshots(config, project)
+
+        assert ok is True
+        assert "refreshed 1 issues from owner/repo" in message
+        mock_pull.assert_called_once_with("owner/repo", project / "issues")
+
+    def test_refresh_skips_when_repo_unresolved(self, project: Path) -> None:
+        config = _make_config(project, {"sources": {"github_repo": None}})
+
+        with patch("engram.fold.queue.infer_github_repo", return_value=None):
+            ok, message = refresh_issue_snapshots(config, project)
+
+        assert ok is True
+        assert "using local issue snapshots" in message
+
+    def test_refresh_returns_failure_when_gh_fails(self, project: Path) -> None:
+        config = _make_config(project, {"sources": {"github_repo": "owner/repo"}})
+
+        called_process_error = subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["gh", "issue", "list"],
+            stderr="authentication failed",
+        )
+
+        with patch("engram.fold.queue.pull_issues", side_effect=called_process_error):
+            ok, message = refresh_issue_snapshots(config, project)
+
+        assert ok is False
+        assert "gh issue list failed for owner/repo" in message
+
+    def test_refresh_returns_failure_when_gh_missing(self, project: Path) -> None:
+        config = _make_config(project, {"sources": {"github_repo": "owner/repo"}})
+
+        with patch("engram.fold.queue.pull_issues", side_effect=FileNotFoundError("gh")):
+            ok, message = refresh_issue_snapshots(config, project)
+
+        assert ok is False
+        assert "gh CLI not found" in message
+
+
+class TestGitTrackedDocDiscovery:
+    def test_prefers_git_tracked_docs_when_available(self, project: Path) -> None:
+        tracked = project / "docs" / "working" / "tracked.md"
+        untracked = project / "docs" / "working" / "scratch.md"
+        tracked.write_text("**Date:** 2026-01-01\n\nTracked")
+        untracked.write_text("**Date:** 2026-01-01\n\nUntracked")
+
+        config = _make_config(project)
+
+        with (
+            patch("engram.fold.queue.list_tracked_markdown_docs", return_value=[tracked]),
+            patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run),
+        ):
+            entries = build_queue(config, project)
+
+        doc_paths = [e["path"] for e in entries if e["type"] == "doc"]
+        assert doc_paths == ["docs/working/tracked.md"]

@@ -116,6 +116,8 @@ Graveyard files are append-only. Never edit existing graveyard entries.
 - Every timeline phase (`## Phase: ...`) must include an `IDs:` line:
   - `IDs: C###, E###, W###` (one or more stable IDs), or
   - `IDs: NONE(reason)` when no stable ID applies.
+- If this chunk yields no concept/epistemic/workflow changes, append a timeline phase
+  that explicitly contains the phrase `No canonical delta` and explains why.
 - Concept registry: structured fields only. 5 lines ideal, 10 max.
 - Epistemic state (`epistemic_state.md`): 1-2 sentence position. 1-sentence agent guidance.
 - Workflow registry: structured fields only. Context + trigger/method.

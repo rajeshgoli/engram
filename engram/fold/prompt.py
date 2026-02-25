@@ -269,6 +269,8 @@ def render_agent_prompt(
         f"- Extract concepts, claims, timeline events, workflows from the chunk\n"
         f"- Every timeline phase entry must include 'IDs:' with C###/E###/W### "
         f"or 'IDs: NONE(reason)' when no stable ID applies.\n"
+        f"- If concepts/epistemic/workflows are unchanged in this chunk, append a "
+        f"timeline phase that explicitly includes the phrase 'No canonical delta'.\n"
         f"- USER PROMPTS encode the project owner's intent — they are authoritative\n"
         f"- DEAD/refuted entries: 1-2 sentences max. Key lesson + what replaced it.\n"
         f"- Process ALL items in the chunk\n"
