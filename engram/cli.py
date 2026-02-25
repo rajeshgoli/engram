@@ -459,8 +459,8 @@ def _enforce_single_active_chunk(project_root: Path) -> None:
                 continue
 
         chunk_patterns = (
-            rf"Knowledge fold:\s*chunk(?:_| )0*{chunk_id}\b",
-            rf"Fold chunk(?:_| )0*{chunk_id}\b",
+            rf"\bKnowledge fold:\s*chunk(?:_| )0*{chunk_id}\b",
+            rf"\bFold chunk(?:_| )0*{chunk_id}\b",
         )
         if any(re.search(pattern, subjects, flags=re.IGNORECASE) for pattern in chunk_patterns):
             _cleanup_chunk_context_from_lock(project_root, lock)

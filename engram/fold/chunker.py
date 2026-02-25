@@ -408,6 +408,7 @@ def _file_exists_at_commit(
         return False
     if raw.startswith("./"):
         raw = raw[2:]
+    raw = raw.rstrip("/")
     lookup = _tracked_paths_lookup_at_commit(str(project_root), ref_commit)
     return raw.lower() in lookup
 
@@ -437,6 +438,10 @@ def _tracked_paths_lookup_at_commit(
         if not path:
             continue
         lookup.setdefault(path.lower(), path)
+        parts = [part for part in path.split("/") if part]
+        for idx in range(1, len(parts)):
+            parent = "/".join(parts[:idx])
+            lookup.setdefault(parent.lower(), parent)
     return lookup
 
 

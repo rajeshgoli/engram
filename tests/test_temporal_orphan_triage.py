@@ -364,6 +364,23 @@ class TestTemporalOrphanDetection:
         orphans = _find_orphaned_concepts(registry, tmp_path, ref_commit=commit)
         assert orphans == []
 
+    def test_ref_commit_directory_paths_are_detected(self, tmp_path: Path) -> None:
+        """Directory code paths should count as existing at ref commit."""
+        from engram.fold.chunker import _find_orphaned_concepts
+
+        (tmp_path / "src" / "live_sim").mkdir(parents=True)
+        (tmp_path / "src" / "live_sim" / "server.py").write_text("# server")
+        registry = tmp_path / "concepts.md"
+        registry.write_text(
+            "# Concept Registry\n\n"
+            "## C001: Live sim module (ACTIVE)\n"
+            "- **Code:** `src/live_sim`\n",
+        )
+        commit = _init_git_repo(tmp_path, files=["concepts.md", "src/live_sim/server.py"])
+
+        orphans = _find_orphaned_concepts(registry, tmp_path, ref_commit=commit)
+        assert orphans == []
+
 
 # ==================================================================
 # 6. scan_drift threading
