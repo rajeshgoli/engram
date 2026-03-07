@@ -14,6 +14,39 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+DEFAULT_PROMPT = """\
+Write an executive briefing for an engineer who just woke up with zero context \
+about this project. Every token matters — every agent in the system reads this \
+file on every session start.
+
+Guiding question: What does an agent need to know to operate in this codebase \
+without breaking things?
+
+INCLUDE:
+- What is this project? (2-3 sentences max)
+- Current runtime architecture in plain English with key file paths
+- What works, what's broken, what's the active research direction
+- Hard rules (things an agent must never do)
+- Key file paths table
+- How to debug issues
+
+DO NOT INCLUDE:
+- Dead concepts — if something is deleted, don't mention it. Exception: if an \
+agent might search for a file that used to exist, one line saying it doesn't exist.
+- Engram concept IDs (C###), epistemic IDs (E###), or workflow IDs (W###) — \
+these are internal bookkeeping, not operator-useful.
+- Workflow registry dumps — state rules plainly.
+- Lookup hooks to engram per-ID files.
+
+Tone: executive briefing. Dense. Every line earns its place. If a line doesn't \
+help an agent make a decision or avoid a mistake, cut it.
+
+Target: 60-80 lines.
+
+Project knowledge follows:
+
+"""
+
 
 def regenerate_l0_briefing(
     config: dict[str, Any],
@@ -22,8 +55,8 @@ def regenerate_l0_briefing(
 ) -> bool:
     """Regenerate the L0 briefing section in the project's CLAUDE.md.
 
-    Uses a lightweight model call to compress living docs into a
-    concise briefing (~50-100 lines).
+    Uses a model call to compress living docs into a concise executive
+    briefing (~60-80 lines).
 
     Returns True on success, False on failure.
     """
@@ -35,94 +68,97 @@ def regenerate_l0_briefing(
         log.warning("Briefing target file not found: %s", target_file)
         return False
 
-    # Read current living docs for briefing generation
-    living_contents: list[str] = []
-    for key in ("timeline", "concepts", "epistemic", "workflows"):
-        p = doc_paths.get(key)
-        if p and p.exists():
-            content = p.read_text()
-            # Truncate very large docs for briefing generation
-            if len(content) > 10_000:
-                content = content[:10_000] + "\n\n[... truncated for briefing ...]\n"
-            living_contents.append(f"### {key.title()}\n{content}")
-
+    living_contents = _read_living_docs(doc_paths)
     if not living_contents:
         return False
 
-    lookup_patterns = _build_lookup_patterns(doc_paths, project_root)
-
-    # Generate briefing via lightweight model call
     briefing_text = _generate_briefing(
         config,
         project_root,
         "\n\n".join(living_contents),
-        lookup_patterns,
     )
     if not briefing_text:
         log.warning("L0 briefing generation returned empty result")
         return False
 
-    # Inject into target file
     _inject_section(target_file, section_header, briefing_text)
     log.info("L0 briefing regenerated in %s", target_file)
     return True
+
+
+def _read_living_docs(doc_paths: dict[str, Path]) -> list[str]:
+    """Read living docs for briefing generation.
+
+    Skips timeline (too large, mostly historical narrative).
+    Reads concepts, epistemic, and workflows in full — these are the
+    docs that contain actionable current-state information.
+    """
+    contents: list[str] = []
+    for key in ("concepts", "epistemic", "workflows"):
+        p = doc_paths.get(key)
+        if p and p.exists():
+            content = p.read_text()
+            contents.append(f"### {key.title()}\n{content}")
+    return contents
 
 
 def _generate_briefing(
     config: dict[str, Any],
     project_root: Path,
     living_docs_content: str,
-    lookup_patterns: dict[str, str],
 ) -> str | None:
-    """Generate L0 briefing by shelling out to a fast model.
+    """Generate L0 briefing by shelling out to the configured model.
+
+    Uses ``briefing.prompt`` from config if set, otherwise falls back
+    to the built-in executive briefing prompt.  Uses the project's
+    ``agent_command`` or ``model`` for the model call.
 
     Returns the briefing text, or None on failure.
     """
-    prompt = (
-        "Compress the following project knowledge into a concise briefing "
-        "(50-100 lines). Focus on: what's alive vs dead, contested claims, "
-        "key workflows, and agent guidance. Use stable IDs (C###/E###/W###).\n\n"
-        "Output requirements:\n"
-        "1) Keep the briefing self-contained: when an ID is first introduced, add a "
-        "short inline gloss so the line is understandable without opening other files.\n"
-        "2) Include a section titled 'Lookup Hooks (Use When Needed)' that tells agents "
-        "exactly which per-ID files to open for deeper context.\n"
-        "3) In Lookup Hooks, include these file patterns exactly:\n"
-        f"- Concept details: {lookup_patterns['concepts']}\n"
-        f"- Epistemic current state: {lookup_patterns['epistemic_current']}\n"
-        f"- Epistemic history/provenance: {lookup_patterns['epistemic_history']}\n"
-        f"- Workflow details: {lookup_patterns['workflows']}\n"
-        "4) Keep the briefing concise but actionable; avoid ID-only shorthand with no hook.\n\n"
-        f"{living_docs_content}"
-    )
+    briefing_cfg = config.get("briefing", {})
+    custom_prompt = briefing_cfg.get("prompt")
+
+    if custom_prompt:
+        prompt = custom_prompt + "\n\n" + living_docs_content
+    else:
+        prompt = DEFAULT_PROMPT + living_docs_content
+
+    model = config.get("model", "sonnet")
+    agent_cmd = config.get("agent_command")
+    if agent_cmd:
+        cmd = agent_cmd.split()
+    else:
+        cmd = ["claude", "--print", "--model", model]
+
+    # Pass prompt via stdin to avoid OS argv size limits (E2BIG)
+    # on large living docs.  claude --print reads stdin when given "-".
+    cmd.append("-")
 
     try:
         result = subprocess.run(
-            ["claude", "--print", "--model", "haiku", prompt],
+            cmd,
+            input=prompt,
             capture_output=True,
             text=True,
             cwd=str(project_root),
-            timeout=120,
+            timeout=300,
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        log.warning("L0 briefing generation failed")
+        if result.returncode != 0:
+            log.warning(
+                "L0 briefing agent failed (rc=%d): %s",
+                result.returncode,
+                result.stderr[:300],
+            )
+    except subprocess.TimeoutExpired:
+        log.warning("L0 briefing generation timed out (300s)")
+    except FileNotFoundError:
+        log.warning("Agent command not found: %s", cmd[0])
+    except OSError as exc:
+        log.warning("L0 briefing OS error: %s", exc)
 
     return None
-
-
-def _build_lookup_patterns(doc_paths: dict[str, Path], project_root: Path) -> dict[str, str]:
-    """Build per-ID file lookup patterns for L0 briefing instructions."""
-    concepts = _to_repo_relative(doc_paths["concepts"], project_root).with_suffix("")
-    epistemic = _to_repo_relative(doc_paths["epistemic"], project_root).with_suffix("")
-    workflows = _to_repo_relative(doc_paths["workflows"], project_root).with_suffix("")
-    return {
-        "concepts": f"{concepts}/current/C###.md",
-        "epistemic_current": f"{epistemic}/current/E###.md",
-        "epistemic_history": f"{epistemic}/history/E###.md",
-        "workflows": f"{workflows}/current/W###.md",
-    }
 
 
 def _to_repo_relative(path: Path, project_root: Path) -> Path:
@@ -132,8 +168,6 @@ def _to_repo_relative(path: Path, project_root: Path) -> Path:
     try:
         return Path(os.path.relpath(resolved_path, resolved_root))
     except ValueError:
-        # Fallback for cross-drive/path-layout edge cases: strip root so
-        # generated hooks remain portable and non-absolute.
         return Path(*resolved_path.parts[1:]) if resolved_path.is_absolute() else resolved_path
 
 
@@ -148,12 +182,10 @@ def _inject_section(file_path: Path, section_header: str, content: str) -> None:
 
     start = text.find(section_header)
     if start == -1:
-        # Append section at end
         if not text.endswith("\n"):
             text += "\n"
         text += f"\n{section_header}\n\n{content}\n"
     else:
-        # Find the end of this section (next same-level or higher heading)
         section_start = start + len(section_header)
         rest = text[section_start:]
         end_offset = len(rest)
