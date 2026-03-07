@@ -130,11 +130,14 @@ def _generate_briefing(
     else:
         cmd = ["claude", "--print", "--model", model]
 
-    cmd.append(prompt)
+    # Pass prompt via stdin to avoid OS argv size limits (E2BIG)
+    # on large living docs.  claude --print reads stdin when given "-".
+    cmd.append("-")
 
     try:
         result = subprocess.run(
             cmd,
+            input=prompt,
             capture_output=True,
             text=True,
             cwd=str(project_root),
@@ -152,6 +155,8 @@ def _generate_briefing(
         log.warning("L0 briefing generation timed out (300s)")
     except FileNotFoundError:
         log.warning("Agent command not found: %s", cmd[0])
+    except OSError as exc:
+        log.warning("L0 briefing OS error: %s", exc)
 
     return None
 

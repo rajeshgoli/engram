@@ -519,13 +519,17 @@ class TestRegenerateL0Briefing:
         result = _generate_briefing(config, project, "### Concepts\nx")
         assert result == "Briefing"
 
-        prompt = mock_run.call_args.args[0][-1]
+        # Prompt passed via stdin (input=), not as argv
+        prompt = mock_run.call_args.kwargs.get("input", "")
         assert "executive briefing" in prompt
         assert "DO NOT INCLUDE" in prompt
         assert "Engram concept IDs" in prompt
         # Old prompt artifacts should be gone
         assert "Lookup Hooks (Use When Needed)" not in prompt
         assert "short inline gloss" not in prompt
+        # Argv ends with "-" (stdin marker), not the full prompt
+        cmd = mock_run.call_args.args[0]
+        assert cmd[-1] == "-"
 
     @patch("engram.server.briefing.subprocess.run")
     def test_generate_briefing_uses_custom_prompt(self, mock_run: MagicMock, project: Path, config: dict) -> None:
@@ -537,7 +541,7 @@ class TestRegenerateL0Briefing:
         result = _generate_briefing(config, project, "### Concepts\ndata")
         assert result == "Custom result"
 
-        prompt = mock_run.call_args.args[0][-1]
+        prompt = mock_run.call_args.kwargs.get("input", "")
         assert prompt.startswith("Custom prompt for this project.")
         assert "### Concepts\ndata" in prompt
 
