@@ -481,55 +481,88 @@ class TestRegenerateL0Briefing:
         doc_paths = resolve_doc_paths(config, project)
         assert regenerate_l0_briefing(config, project, doc_paths) is False
 
-    def test_build_lookup_patterns(self, project: Path, config: dict) -> None:
+    def test_read_living_docs_skips_timeline(self, project: Path, config: dict) -> None:
+        """Timeline is skipped — too large, mostly historical narrative."""
         from engram.config import resolve_doc_paths
-        from engram.server.briefing import _build_lookup_patterns
+        from engram.server.briefing import _read_living_docs
 
         doc_paths = resolve_doc_paths(config, project)
-        patterns = _build_lookup_patterns(doc_paths, project)
-        assert patterns["concepts"] == "docs/decisions/concept_registry/current/C###.md"
-        assert patterns["epistemic_current"] == "docs/decisions/epistemic_state/current/E###.md"
-        assert patterns["epistemic_history"] == "docs/decisions/epistemic_state/history/E###.md"
-        assert patterns["workflows"] == "docs/decisions/workflow_registry/current/W###.md"
+        # Write substantial content to timeline to verify it's skipped
+        (project / "docs" / "decisions" / "timeline.md").write_text("# Timeline\n" + "x" * 50_000)
+        contents = _read_living_docs(doc_paths)
+        joined = "\n".join(contents)
+        assert "Timeline" not in joined
+        assert "Concepts" in joined
+        assert "Epistemic" in joined
+        assert "Workflows" in joined
 
-    def test_lookup_patterns_stay_relative_for_external_doc_paths(self, project: Path) -> None:
-        from engram.server.briefing import _build_lookup_patterns
+    def test_read_living_docs_no_truncation(self, project: Path, config: dict) -> None:
+        """Concept/epistemic/workflow docs are read in full, not truncated."""
+        from engram.config import resolve_doc_paths
+        from engram.server.briefing import _read_living_docs
 
-        external_root = project.parent / "external_docs"
-        external_root.mkdir(exist_ok=True)
-        external_concepts = external_root / "concept_registry.md"
-        external_concepts.write_text("# Concept Registry\n")
-
-        doc_paths = {
-            "concepts": external_concepts,
-            "epistemic": project / "docs" / "decisions" / "epistemic_state.md",
-            "workflows": project / "docs" / "decisions" / "workflow_registry.md",
-            "timeline": project / "docs" / "decisions" / "timeline.md",
-        }
-
-        patterns = _build_lookup_patterns(doc_paths, project)
-        assert not Path(patterns["concepts"]).is_absolute()
-        assert patterns["concepts"].startswith("../")
+        doc_paths = resolve_doc_paths(config, project)
+        large_content = "# Epistemic State\n" + "claim " * 20_000
+        (project / "docs" / "decisions" / "epistemic_state.md").write_text(large_content)
+        contents = _read_living_docs(doc_paths)
+        joined = "\n".join(contents)
+        # Full content present — no "[... truncated ...]"
+        assert "truncated" not in joined
+        assert "claim " * 100 in joined
 
     @patch("engram.server.briefing.subprocess.run")
-    def test_generate_briefing_prompt_includes_lookup_hooks(self, mock_run: MagicMock, project: Path, config: dict) -> None:
+    def test_generate_briefing_uses_executive_prompt(self, mock_run: MagicMock, project: Path, config: dict) -> None:
         from engram.server.briefing import _generate_briefing
 
         mock_run.return_value = MagicMock(returncode=0, stdout="Briefing")
-        lookup_patterns = {
-            "concepts": "docs/decisions/concept_registry/current/C###.md",
-            "epistemic_current": "docs/decisions/epistemic_state/current/E###.md",
-            "epistemic_history": "docs/decisions/epistemic_state/history/E###.md",
-            "workflows": "docs/decisions/workflow_registry/current/W###.md",
-        }
 
-        result = _generate_briefing(config, project, "### Timeline\nx", lookup_patterns)
+        result = _generate_briefing(config, project, "### Concepts\nx")
         assert result == "Briefing"
 
         prompt = mock_run.call_args.args[0][-1]
-        assert "Lookup Hooks (Use When Needed)" in prompt
-        assert "short inline gloss" in prompt
-        assert lookup_patterns["concepts"] in prompt
-        assert lookup_patterns["epistemic_current"] in prompt
-        assert lookup_patterns["epistemic_history"] in prompt
-        assert lookup_patterns["workflows"] in prompt
+        assert "executive briefing" in prompt
+        assert "DO NOT INCLUDE" in prompt
+        assert "Engram concept IDs" in prompt
+        # Old prompt artifacts should be gone
+        assert "Lookup Hooks (Use When Needed)" not in prompt
+        assert "short inline gloss" not in prompt
+
+    @patch("engram.server.briefing.subprocess.run")
+    def test_generate_briefing_uses_custom_prompt(self, mock_run: MagicMock, project: Path, config: dict) -> None:
+        from engram.server.briefing import _generate_briefing
+
+        config["briefing"]["prompt"] = "Custom prompt for this project."
+        mock_run.return_value = MagicMock(returncode=0, stdout="Custom result")
+
+        result = _generate_briefing(config, project, "### Concepts\ndata")
+        assert result == "Custom result"
+
+        prompt = mock_run.call_args.args[0][-1]
+        assert prompt.startswith("Custom prompt for this project.")
+        assert "### Concepts\ndata" in prompt
+
+    @patch("engram.server.briefing.subprocess.run")
+    def test_generate_briefing_uses_agent_command(self, mock_run: MagicMock, project: Path, config: dict) -> None:
+        from engram.server.briefing import _generate_briefing
+
+        config["agent_command"] = "claude --dangerously-skip-permissions --print --model sonnet"
+        mock_run.return_value = MagicMock(returncode=0, stdout="Result")
+
+        _generate_briefing(config, project, "content")
+
+        cmd = mock_run.call_args.args[0]
+        assert cmd[0] == "claude"
+        assert "--dangerously-skip-permissions" in cmd
+        assert "--model" in cmd
+
+    @patch("engram.server.briefing.subprocess.run")
+    def test_generate_briefing_uses_config_model(self, mock_run: MagicMock, project: Path, config: dict) -> None:
+        from engram.server.briefing import _generate_briefing
+
+        config["model"] = "opus"
+        mock_run.return_value = MagicMock(returncode=0, stdout="Result")
+
+        _generate_briefing(config, project, "content")
+
+        cmd = mock_run.call_args.args[0]
+        assert "opus" in cmd
