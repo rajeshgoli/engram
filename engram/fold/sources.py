@@ -90,6 +90,16 @@ def pull_prs(
             if _matches_branch_filter(pr.get("baseRefName", ""), base_branches)
         ]
 
+    # Clear stale snapshots so narrowed filters don't leave old PRs on disk
+    matched_numbers = {pr["number"] for pr in prs}
+    for stale in prs_dir.glob("*.json"):
+        try:
+            num = int(stale.stem)
+        except ValueError:
+            continue
+        if num not in matched_numbers:
+            stale.unlink()
+
     for pr in prs:
         num = pr["number"]
         path = prs_dir / f"{num}.json"

@@ -229,6 +229,24 @@ class TestPullPrs:
         assert len(result) == 2
         assert {pr["number"] for pr in result} == {2, 3}
 
+    def test_purges_stale_snapshots(self, tmp_path: Path) -> None:
+        prs_dir = tmp_path / "prs"
+        prs_dir.mkdir()
+        # Pre-existing snapshot from a PR that won't be in the new fetch
+        (prs_dir / "99.json").write_text('{"number": 99}')
+
+        mock_prs = [
+            {"number": 1, "baseRefName": "dev", "title": "Current"},
+        ]
+        mock_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(mock_prs)
+        )
+        with patch("engram.fold.sources.subprocess.run", return_value=mock_result):
+            pull_prs("owner/repo", prs_dir)
+
+        assert (prs_dir / "1.json").exists()
+        assert not (prs_dir / "99.json").exists()
+
     def test_empty_base_branches_returns_all(self, tmp_path: Path) -> None:
         mock_prs = [
             {"number": 1, "baseRefName": "dev"},
