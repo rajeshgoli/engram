@@ -1386,6 +1386,9 @@ def _render_item_content(item: dict[str, Any], project_root: Path) -> str:
     elif item["type"] == "issue":
         header = f"## [{tag}] Issue #{item['issue_number']}: {item['issue_title']}\n"
         header += f"**Created:** {item['date'][:10]}\n\n"
+    elif item["type"] == "pr":
+        header = f"## [{tag}] PR #{item['pr_number']}: {item['pr_title']}\n"
+        header += f"**Merged:** {item['date'][:10]}\n\n"
     else:
         header = f"## [{tag}] Doc: {item['path']}\n"
         header += f"**Created:** {item['date'][:10]}"
@@ -1403,6 +1406,10 @@ def _render_item_content(item: dict[str, Any], project_root: Path) -> str:
             from engram.fold.sources import render_issue_markdown
             issue_data = json.loads(item_path.read_text())
             content = render_issue_markdown(issue_data)
+        elif item["type"] == "pr":
+            from engram.fold.sources import render_pr_markdown
+            pr_data = json.loads(item_path.read_text())
+            content = render_pr_markdown(pr_data)
         else:
             content = item_path.read_text(errors="ignore")
     except FileNotFoundError:
