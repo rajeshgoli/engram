@@ -70,6 +70,9 @@ briefing:
 sources:
   issues: local_data/issues/
   refresh_issues: true
+  pull_requests: local_data/pull_requests/
+  refresh_pull_requests: true
+  pr_base_branches: []  # empty = all merged PRs; or ["dev", "epic/*"]
   github_repo: null  # Optional explicit owner/repo; else infer from git origin
   docs:
     - docs/working/
@@ -171,7 +174,7 @@ def init(project_root: str) -> None:
 def build_queue_cmd(project_root: str, start_date: object, refresh_issues: bool) -> None:
     """Build chronological queue of all project artifacts."""
     from engram.config import load_config
-    from engram.fold.queue import build_queue, refresh_issue_snapshots
+    from engram.fold.queue import build_queue, refresh_issue_snapshots, refresh_pr_snapshots
     from engram.server.db import ServerDB
 
     root = Path(project_root)
@@ -199,6 +202,12 @@ def build_queue_cmd(project_root: str, start_date: object, refresh_issues: bool)
             )
             raise SystemExit(1)
 
+        pr_ok, pr_message = refresh_pr_snapshots(config, root)
+        if pr_ok:
+            click.echo(f"PR refresh: {pr_message}")
+        else:
+            click.echo(f"PR refresh failed: {pr_message}. Continuing with local snapshots.")
+
     entries = build_queue(config, root, start_date=effective_start)
 
     doc_count = sum(1 for e in entries if e["type"] == "doc")
@@ -206,11 +215,13 @@ def build_queue_cmd(project_root: str, start_date: object, refresh_issues: bool)
         1 for e in entries if e["type"] == "doc" and e["pass"] == "revisit"
     )
     issue_count = sum(1 for e in entries if e["type"] == "issue")
+    pr_count = sum(1 for e in entries if e["type"] == "pr")
     session_count = sum(1 for e in entries if e["type"] == "prompts")
 
     click.echo(f"Built queue: {len(entries)} entries")
     click.echo(f"  Docs: {doc_count} ({revisit_count} revisits)")
     click.echo(f"  Issues: {issue_count}")
+    click.echo(f"  PRs: {pr_count}")
     click.echo(f"  Sessions: {session_count}")
 
     if entries:

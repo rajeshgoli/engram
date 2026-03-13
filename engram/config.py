@@ -27,6 +27,9 @@ DEFAULTS: dict[str, Any] = {
     "sources": {
         "issues": "local_data/issues/",
         "refresh_issues": True,
+        "pull_requests": "local_data/pull_requests/",
+        "refresh_pull_requests": True,
+        "pr_base_branches": [],
         "github_repo": None,
         "docs": ["docs/working/", "docs/archive/", "docs/specs/"],
         "sessions": {
