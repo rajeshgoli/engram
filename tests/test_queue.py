@@ -13,7 +13,7 @@ import pytest
 import yaml
 
 from engram.config import DEFAULTS, _deep_merge
-from engram.fold.queue import REVISIT_THRESHOLD_DAYS, build_queue, refresh_issue_snapshots
+from engram.fold.queue import REVISIT_THRESHOLD_DAYS, build_queue, refresh_issue_snapshots, refresh_pr_snapshots
 
 
 @pytest.fixture
@@ -154,6 +154,143 @@ class TestBuildQueueIssues:
         assert issue_entries[0]["issue_number"] == 42
         assert issue_entries[0]["issue_title"] == "Bug report"
         assert issue_entries[0]["date"] == "2026-01-10T12:00:00Z"
+
+
+class TestBuildQueuePRs:
+    def test_includes_pr_entries(self, project: Path) -> None:
+        prs_dir = project / "local_data" / "pull_requests"
+        prs_dir.mkdir(parents=True)
+
+        pr = {
+            "number": 100,
+            "title": "Fix the thing",
+            "body": "Detailed fix description.",
+            "createdAt": "2026-03-01T00:00:00Z",
+            "mergedAt": "2026-03-02T10:00:00Z",
+            "baseRefName": "dev",
+            "headRefName": "fix/100",
+            "additions": 20,
+            "deletions": 5,
+            "changedFiles": 2,
+            "files": [],
+            "reviews": [],
+            "comments": [],
+        }
+        (prs_dir / "100.json").write_text(json.dumps(pr))
+
+        config = _make_config(project, {
+            "sources": {"pull_requests": "local_data/pull_requests/"},
+        })
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            entries = build_queue(config, project)
+
+        pr_entries = [e for e in entries if e["type"] == "pr"]
+        assert len(pr_entries) == 1
+        assert pr_entries[0]["pr_number"] == 100
+        assert pr_entries[0]["pr_title"] == "Fix the thing"
+        # Uses mergedAt as the canonical date
+        assert pr_entries[0]["date"] == "2026-03-02T10:00:00Z"
+
+    def test_pr_uses_created_at_when_no_merged_at(self, project: Path) -> None:
+        prs_dir = project / "local_data" / "pull_requests"
+        prs_dir.mkdir(parents=True)
+
+        pr = {
+            "number": 200,
+            "title": "WIP PR",
+            "body": "",
+            "createdAt": "2026-03-05T00:00:00Z",
+            "mergedAt": None,
+            "baseRefName": "dev",
+            "headRefName": "wip/200",
+            "additions": 0,
+            "deletions": 0,
+            "changedFiles": 0,
+            "files": [],
+            "reviews": [],
+            "comments": [],
+        }
+        (prs_dir / "200.json").write_text(json.dumps(pr))
+
+        config = _make_config(project, {
+            "sources": {"pull_requests": "local_data/pull_requests/"},
+        })
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            entries = build_queue(config, project)
+
+        pr_entries = [e for e in entries if e["type"] == "pr"]
+        assert len(pr_entries) == 1
+        assert pr_entries[0]["date"] == "2026-03-05T00:00:00Z"
+
+    def test_pr_filtered_by_start_date(self, project: Path) -> None:
+        prs_dir = project / "local_data" / "pull_requests"
+        prs_dir.mkdir(parents=True)
+
+        for num, merged in [(1, "2025-12-01T00:00:00Z"), (2, "2026-03-01T00:00:00Z")]:
+            pr = {
+                "number": num,
+                "title": f"PR {num}",
+                "body": "",
+                "createdAt": merged,
+                "mergedAt": merged,
+                "baseRefName": "dev",
+                "headRefName": f"fix/{num}",
+                "additions": 0,
+                "deletions": 0,
+                "changedFiles": 0,
+                "files": [],
+                "reviews": [],
+                "comments": [],
+            }
+            (prs_dir / f"{num}.json").write_text(json.dumps(pr))
+
+        config = _make_config(project, {
+            "sources": {"pull_requests": "local_data/pull_requests/"},
+        })
+
+        with patch("engram.fold.sources.subprocess.run", side_effect=_mock_git_run):
+            entries = build_queue(config, project, start_date="2026-01-01")
+
+        pr_entries = [e for e in entries if e["type"] == "pr"]
+        assert len(pr_entries) == 1
+        assert pr_entries[0]["pr_number"] == 2
+
+
+class TestPRRefresh:
+    def test_refresh_uses_explicit_repo(self, project: Path) -> None:
+        config = _make_config(project, {"sources": {"github_repo": "owner/repo"}})
+
+        with patch("engram.fold.queue.pull_prs", return_value=[{"number": 1}]) as mock_pull:
+            ok, message = refresh_pr_snapshots(config, project)
+
+        assert ok is True
+        assert "refreshed 1 PRs from owner/repo" in message
+
+    def test_refresh_disabled_by_config(self, project: Path) -> None:
+        config = _make_config(project, {
+            "sources": {"refresh_pull_requests": False},
+        })
+
+        ok, message = refresh_pr_snapshots(config, project)
+        assert ok is True
+        assert "disabled" in message
+
+    def test_refresh_returns_failure_when_gh_fails(self, project: Path) -> None:
+        config = _make_config(project, {"sources": {"github_repo": "owner/repo"}})
+
+        called_process_error = subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["gh", "pr", "list"],
+            stderr="authentication failed",
+        )
+
+        with patch("engram.fold.queue.pull_prs", side_effect=called_process_error):
+            ok, message = refresh_pr_snapshots(config, project)
+
+        assert ok is False
+        assert "gh pr list failed" in message
 
 
 class TestBuildQueueSessions:

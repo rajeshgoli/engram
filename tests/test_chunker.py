@@ -1272,6 +1272,42 @@ class TestRenderItemContent:
         result = _render_item_content(item, project)
         assert "Issue #42: Fix bug" in result
 
+    def test_pr_item(self, project):
+        pr_dir = project / "local_data" / "pull_requests"
+        pr_dir.mkdir(parents=True)
+        pr_data = {
+            "number": 100,
+            "title": "Fix the perf bug",
+            "body": "Optimized the hot path.",
+            "createdAt": "2026-03-01T00:00:00Z",
+            "mergedAt": "2026-03-02T10:00:00Z",
+            "baseRefName": "epic/1808",
+            "headRefName": "fix/100",
+            "additions": 20,
+            "deletions": 5,
+            "changedFiles": 2,
+            "files": [{"path": "src/main.py", "additions": 15, "deletions": 3}],
+            "reviews": [],
+            "comments": [],
+        }
+        (pr_dir / "100.json").write_text(json.dumps(pr_data))
+
+        item = {
+            "date": "2026-03-02T10:00:00Z",
+            "type": "pr",
+            "path": "local_data/pull_requests/100.json",
+            "chars": 500,
+            "pass": "initial",
+            "pr_number": 100,
+            "pr_title": "Fix the perf bug",
+        }
+        result = _render_item_content(item, project)
+        assert "PR #100: Fix the perf bug" in result
+        assert "Merged:" in result
+        assert "epic/1808" in result
+        assert "Optimized the hot path." in result
+        assert "`src/main.py`" in result
+
     def test_missing_file_graceful(self, project):
         item = _make_doc_item(path="nonexistent.md")
         result = _render_item_content(item, project)

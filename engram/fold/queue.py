@@ -25,7 +25,9 @@ from engram.fold.sources import (
     parse_date,
     parse_frontmatter_date,
     pull_issues,
+    pull_prs,
     render_issue_markdown,
+    render_pr_markdown,
 )
 
 # Dual-pass threshold: if modified > created + this many days, create revisit entry
@@ -60,6 +62,38 @@ def refresh_issue_snapshots(config: dict[str, Any], project_root: Path) -> tuple
         return False, "gh CLI not found while refreshing issues"
 
     return True, f"refreshed {len(issues)} issues from {repo}"
+
+
+def refresh_pr_snapshots(config: dict[str, Any], project_root: Path) -> tuple[bool, str]:
+    """Refresh ``sources.pull_requests`` JSON snapshots from GitHub.
+
+    Returns:
+        (ok, message) where ``ok`` indicates refresh success.
+    """
+    sources = config.get("sources", {})
+    if not sources.get("refresh_pull_requests", True):
+        return True, "disabled by config (sources.refresh_pull_requests: false)"
+
+    prs_dir = project_root / sources.get("pull_requests", "local_data/pull_requests/")
+    repo = sources.get("github_repo") or infer_github_repo(project_root)
+    if not repo:
+        return True, (
+            "unable to resolve GitHub repo (set sources.github_repo or configure "
+            "git remote.origin.url); using local PR snapshots"
+        )
+
+    base_branches = sources.get("pr_base_branches", [])
+
+    try:
+        prs = pull_prs(repo, prs_dir, base_branches or None)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        detail = f": {stderr}" if stderr else ""
+        return False, f"gh pr list failed for {repo}{detail}"
+    except FileNotFoundError:
+        return False, "gh CLI not found while refreshing PRs"
+
+    return True, f"refreshed {len(prs)} PRs from {repo}"
 
 
 def build_queue(
@@ -188,6 +222,32 @@ def build_queue(
                 })
             except (json.JSONDecodeError, KeyError) as exc:
                 logger.warning("Skipping issue %s: %s", f.name, exc)
+
+    # --- Process pull requests ---
+    prs_dir = project_root / sources.get("pull_requests", "local_data/pull_requests/")
+    if prs_dir.exists():
+        for f in sorted(prs_dir.glob("*.json")):
+            try:
+                pr = json.loads(f.read_text())
+                rendered = render_pr_markdown(pr)
+                char_count = len(rendered)
+                rel_path = str(f.relative_to(project_root))
+                sizes[rel_path] = char_count
+
+                # Use mergedAt as the canonical date (when work landed)
+                pr_date = pr.get("mergedAt") or pr.get("createdAt", "")
+
+                entries.append({
+                    "date": pr_date,
+                    "type": "pr",
+                    "path": rel_path,
+                    "chars": char_count,
+                    "pass": "initial",
+                    "pr_number": pr["number"],
+                    "pr_title": pr.get("title", ""),
+                })
+            except (json.JSONDecodeError, KeyError) as exc:
+                logger.warning("Skipping PR %s: %s", f.name, exc)
 
     # --- Process session prompts ---
     fmt = session_cfg.get("format", "claude-code")

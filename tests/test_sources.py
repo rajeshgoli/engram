@@ -10,13 +10,16 @@ from unittest.mock import patch
 import pytest
 
 from engram.fold.sources import (
+    _matches_branch_filter,
     extract_issue_number,
     git_diff_summary,
     get_doc_git_dates,
     parse_date,
     parse_frontmatter_date,
     pull_issues,
+    pull_prs,
     render_issue_markdown,
+    render_pr_markdown,
 )
 
 
@@ -71,6 +74,208 @@ class TestRenderIssueMarkdown:
         }
         result = render_issue_markdown(issue)
         assert "bug, priority" in result
+
+
+class TestRenderPrMarkdown:
+    def test_basic_pr(self) -> None:
+        pr = {
+            "baseRefName": "dev",
+            "headRefName": "feature/123-fix",
+            "additions": 50,
+            "deletions": 10,
+            "changedFiles": 3,
+            "body": "Fixed the bug.",
+            "files": [],
+            "reviews": [],
+            "comments": [],
+        }
+        result = render_pr_markdown(pr)
+        assert "**Merged** into `dev` from `feature/123-fix`" in result
+        assert "+50 -10 across 3 files" in result
+        assert "Fixed the bug." in result
+
+    def test_with_files(self) -> None:
+        pr = {
+            "baseRefName": "dev",
+            "headRefName": "fix/abc",
+            "additions": 20,
+            "deletions": 5,
+            "changedFiles": 2,
+            "body": "",
+            "files": [
+                {"path": "src/main.py", "additions": 15, "deletions": 3},
+                {"path": "tests/test_main.py", "additions": 5, "deletions": 2},
+            ],
+            "reviews": [],
+            "comments": [],
+        }
+        result = render_pr_markdown(pr)
+        assert "### Files changed" in result
+        assert "`src/main.py` (+15 -3)" in result
+        assert "`tests/test_main.py` (+5 -2)" in result
+
+    def test_with_reviews(self) -> None:
+        pr = {
+            "baseRefName": "epic/1808",
+            "headRefName": "feature/fix",
+            "additions": 10,
+            "deletions": 0,
+            "changedFiles": 1,
+            "body": "PR body.",
+            "files": [],
+            "reviews": [
+                {
+                    "author": {"login": "reviewer1"},
+                    "state": "APPROVED",
+                    "body": "LGTM",
+                },
+                {
+                    "author": {"login": "bot"},
+                    "state": "COMMENTED",
+                    "body": "",  # empty body — should be filtered
+                },
+            ],
+            "comments": [],
+        }
+        result = render_pr_markdown(pr)
+        assert "### Reviews" in result
+        assert "**reviewer1** (APPROVED):" in result
+        assert "LGTM" in result
+        # Empty review body should not appear
+        assert "bot" not in result
+
+    def test_with_comments(self) -> None:
+        pr = {
+            "baseRefName": "dev",
+            "headRefName": "feature/x",
+            "additions": 1,
+            "deletions": 0,
+            "changedFiles": 1,
+            "body": "",
+            "files": [],
+            "reviews": [],
+            "comments": [
+                {
+                    "author": {"login": "alice"},
+                    "createdAt": "2026-03-10T12:00:00Z",
+                    "body": "Can we add a test?",
+                }
+            ],
+        }
+        result = render_pr_markdown(pr)
+        assert "### Comments" in result
+        assert "**alice** (2026-03-10):" in result
+        assert "Can we add a test?" in result
+
+    def test_none_body(self) -> None:
+        pr = {
+            "baseRefName": "dev",
+            "headRefName": "fix/y",
+            "additions": 0,
+            "deletions": 0,
+            "changedFiles": 0,
+            "body": None,
+            "files": [],
+            "reviews": [],
+            "comments": [],
+        }
+        result = render_pr_markdown(pr)
+        assert "**Merged**" in result
+
+
+class TestPullPrs:
+    def test_writes_pr_files(self, tmp_path: Path) -> None:
+        mock_prs = [
+            {
+                "number": 100,
+                "title": "Fix bug",
+                "body": "Fixed",
+                "createdAt": "2026-03-01T00:00:00Z",
+                "mergedAt": "2026-03-02T00:00:00Z",
+                "baseRefName": "dev",
+                "headRefName": "fix/100",
+                "additions": 10,
+                "deletions": 2,
+                "changedFiles": 1,
+                "files": [],
+                "reviews": [],
+                "comments": [],
+            },
+        ]
+        mock_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(mock_prs)
+        )
+        with patch("engram.fold.sources.subprocess.run", return_value=mock_result):
+            prs_dir = tmp_path / "prs"
+            result = pull_prs("owner/repo", prs_dir)
+
+        assert len(result) == 1
+        assert (prs_dir / "100.json").exists()
+
+    def test_filters_by_base_branch(self, tmp_path: Path) -> None:
+        mock_prs = [
+            {"number": 1, "baseRefName": "dev", "title": "To dev"},
+            {"number": 2, "baseRefName": "epic/1808", "title": "To epic"},
+            {"number": 3, "baseRefName": "epic/2040", "title": "To epic 2"},
+            {"number": 4, "baseRefName": "main", "title": "To main"},
+        ]
+        mock_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(mock_prs)
+        )
+        with patch("engram.fold.sources.subprocess.run", return_value=mock_result):
+            prs_dir = tmp_path / "prs"
+            result = pull_prs("owner/repo", prs_dir, base_branches=["epic/*"])
+
+        assert len(result) == 2
+        assert {pr["number"] for pr in result} == {2, 3}
+
+    def test_purges_stale_snapshots(self, tmp_path: Path) -> None:
+        prs_dir = tmp_path / "prs"
+        prs_dir.mkdir()
+        # Pre-existing snapshot from a PR that won't be in the new fetch
+        (prs_dir / "99.json").write_text('{"number": 99}')
+
+        mock_prs = [
+            {"number": 1, "baseRefName": "dev", "title": "Current"},
+        ]
+        mock_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(mock_prs)
+        )
+        with patch("engram.fold.sources.subprocess.run", return_value=mock_result):
+            pull_prs("owner/repo", prs_dir)
+
+        assert (prs_dir / "1.json").exists()
+        assert not (prs_dir / "99.json").exists()
+
+    def test_empty_base_branches_returns_all(self, tmp_path: Path) -> None:
+        mock_prs = [
+            {"number": 1, "baseRefName": "dev"},
+            {"number": 2, "baseRefName": "epic/1808"},
+        ]
+        mock_result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(mock_prs)
+        )
+        with patch("engram.fold.sources.subprocess.run", return_value=mock_result):
+            prs_dir = tmp_path / "prs"
+            result = pull_prs("owner/repo", prs_dir, base_branches=None)
+
+        assert len(result) == 2
+
+
+class TestMatchesBranchFilter:
+    def test_exact_match(self) -> None:
+        assert _matches_branch_filter("dev", ["dev"]) is True
+
+    def test_glob_match(self) -> None:
+        assert _matches_branch_filter("epic/1808", ["epic/*"]) is True
+        assert _matches_branch_filter("epic/2040", ["epic/*"]) is True
+
+    def test_no_match(self) -> None:
+        assert _matches_branch_filter("main", ["dev", "epic/*"]) is False
+
+    def test_multiple_patterns(self) -> None:
+        assert _matches_branch_filter("dev", ["dev", "epic/*"]) is True
+        assert _matches_branch_filter("epic/1808", ["dev", "epic/*"]) is True
 
 
 class TestParseFrontmatterDate:

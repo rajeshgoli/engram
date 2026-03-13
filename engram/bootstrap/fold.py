@@ -20,7 +20,7 @@ from typing import Any
 from engram.config import load_config, resolve_doc_paths
 from engram.dispatch import invoke_agent, read_docs
 from engram.fold.chunker import ChunkResult, cleanup_chunk_context_worktree, next_chunk
-from engram.fold.queue import build_queue, refresh_issue_snapshots
+from engram.fold.queue import build_queue, refresh_issue_snapshots, refresh_pr_snapshots
 from engram.linter import lint_post_dispatch
 from engram.server.briefing import regenerate_l0_briefing
 from engram.server.db import ServerDB
@@ -141,6 +141,12 @@ def forward_fold(
         log.error("Issue refresh failed: %s", refresh_message)
         return False
     log.info("Issue refresh: %s", refresh_message)
+
+    pr_ok, pr_message = refresh_pr_snapshots(config, project_root)
+    if pr_ok:
+        log.info("PR refresh: %s", pr_message)
+    else:
+        log.warning("PR refresh failed: %s — continuing with local snapshots", pr_message)
 
     # Step 1: Build queue (filtered by from_date)
     log.info("Building queue...")

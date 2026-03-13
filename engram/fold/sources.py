@@ -1,4 +1,4 @@
-"""Source ingestion: issue pulling, git dates, frontmatter parsing.
+"""Source ingestion: issue/PR pulling, git dates, frontmatter parsing.
 
 Ported from v2 (fractal-market-simulator/scripts/knowledge_fold.py)
 with all paths parameterized by config.
@@ -12,6 +12,7 @@ import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
+from fnmatch import fnmatch
 from typing import Iterable
 
 
@@ -46,6 +47,140 @@ def pull_issues(repo: str, issues_dir: Path) -> list[dict]:
         path.write_text(json.dumps(issue, indent=2))
 
     return issues
+
+
+def pull_prs(
+    repo: str,
+    prs_dir: Path,
+    base_branches: list[str] | None = None,
+) -> list[dict]:
+    """Pull merged GitHub PRs with review comments into local JSON files.
+
+    Args:
+        repo: GitHub repo in "owner/repo" format.
+        prs_dir: Directory to write PR JSON files.
+        base_branches: Optional list of base branch filters (supports globs
+            like ``epic/*``). Empty list or None means all merged PRs.
+
+    Returns:
+        List of PR dicts.
+    """
+    prs_dir.mkdir(parents=True, exist_ok=True)
+
+    result = subprocess.run(
+        [
+            "gh", "pr", "list",
+            "--repo", repo,
+            "--state", "merged",
+            "--json", (
+                "number,title,body,createdAt,mergedAt,baseRefName,"
+                "headRefName,additions,deletions,changedFiles,"
+                "reviews,comments,files"
+            ),
+            "--limit", "5000",
+        ],
+        capture_output=True, text=True, check=True,
+    )
+
+    prs = json.loads(result.stdout)
+
+    if base_branches:
+        prs = [
+            pr for pr in prs
+            if _matches_branch_filter(pr.get("baseRefName", ""), base_branches)
+        ]
+
+    # Clear stale snapshots so narrowed filters don't leave old PRs on disk
+    matched_numbers = {pr["number"] for pr in prs}
+    for stale in prs_dir.glob("*.json"):
+        try:
+            num = int(stale.stem)
+        except ValueError:
+            continue
+        if num not in matched_numbers:
+            stale.unlink()
+
+    for pr in prs:
+        num = pr["number"]
+        path = prs_dir / f"{num}.json"
+        path.write_text(json.dumps(pr, indent=2))
+
+    return prs
+
+
+def _matches_branch_filter(branch: str, patterns: list[str]) -> bool:
+    """Check if a branch name matches any of the given patterns.
+
+    Supports exact match and glob patterns (e.g. ``epic/*``).
+    """
+    return any(fnmatch(branch, pat) for pat in patterns)
+
+
+def render_pr_markdown(pr: dict) -> str:
+    """Render a GitHub PR JSON object as clean markdown."""
+    parts = []
+
+    # Meta line
+    base = pr.get("baseRefName", "?")
+    head = pr.get("headRefName", "?")
+    additions = pr.get("additions", 0)
+    deletions = pr.get("deletions", 0)
+    changed = pr.get("changedFiles", 0)
+    parts.append(f"**Merged** into `{base}` from `{head}`")
+    parts.append(f"**Changes:** +{additions} -{deletions} across {changed} files")
+    parts.append("")
+
+    # Body
+    body = pr.get("body", "") or ""
+    if body:
+        parts.append(body)
+        parts.append("")
+
+    # Changed files list
+    files = pr.get("files", [])
+    if files:
+        parts.append("### Files changed")
+        parts.append("")
+        for f in files:
+            path = f.get("path", "")
+            add = f.get("additions", 0)
+            dele = f.get("deletions", 0)
+            parts.append(f"- `{path}` (+{add} -{dele})")
+        parts.append("")
+
+    # Review comments
+    reviews = pr.get("reviews", [])
+    review_comments = [
+        r for r in reviews
+        if r.get("body", "").strip()
+    ]
+    if review_comments:
+        parts.append("### Reviews")
+        parts.append("")
+        for review in review_comments:
+            author = review.get("author", {}).get("login", "unknown")
+            state = review.get("state", "")
+            rbody = review.get("body", "")
+            parts.append(f"**{author}** ({state}):")
+            parts.append("")
+            parts.append(rbody)
+            parts.append("")
+
+    # PR-level comments (conversation)
+    comments = pr.get("comments", [])
+    if comments:
+        parts.append("### Comments")
+        parts.append("")
+        for comment in comments:
+            author = comment.get("author", {}).get("login", "unknown")
+            date = comment.get("createdAt", "")[:10]
+            cbody = comment.get("body", "")
+            parts.append(f"**{author}** ({date}):")
+            parts.append("")
+            parts.append(cbody)
+            parts.append("")
+
+    return "\n".join(parts)
 
 
 def infer_github_repo(project_root: Path) -> str | None:
