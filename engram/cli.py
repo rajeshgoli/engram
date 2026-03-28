@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import json
 from pathlib import Path
 
 import click
@@ -538,6 +539,101 @@ def _cleanup_chunk_context_from_lock(project_root: Path, lock: dict) -> None:
     cleanup_chunk_context_worktree(project_root, Path(raw))
 
 
+def _emit_json(payload: object) -> None:
+    """Print a JSON payload for CLI consumers."""
+    click.echo(json.dumps(payload, indent=2, sort_keys=True, default=str))
+
+
+def _utcnow() -> "datetime":
+    """Return the current UTC timestamp."""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc)
+
+
+def _parse_timestamp(raw: str) -> "datetime":
+    """Parse an ISO timestamp into an aware UTC datetime."""
+    from datetime import datetime, timezone
+
+    return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def _collect_concept_counts(project_root: Path, config: dict) -> dict[str, int]:
+    """Count active and inactive concepts from the concept registry."""
+    from engram.config import resolve_doc_paths
+    from engram.parse import extract_id, parse_sections
+
+    counts = {
+        "active_concepts": 0,
+        "dead_concepts": 0,
+    }
+
+    concepts_path = resolve_doc_paths(config, project_root)["concepts"]
+    if not concepts_path.exists():
+        return counts
+
+    for section in parse_sections(concepts_path.read_text()):
+        entry_id = extract_id(section["heading"])
+        if not entry_id or not entry_id.startswith("C"):
+            continue
+
+        heading = section["heading"].upper()
+        if "(DEAD" in heading or "(EVOLVED" in heading:
+            counts["dead_concepts"] += 1
+        else:
+            counts["active_concepts"] += 1
+
+    return counts
+
+
+def _collect_stats(project_root: Path, config: dict) -> dict[str, object]:
+    """Collect fold telemetry and concept health stats."""
+    from datetime import timedelta
+
+    from engram.server.buffer import ContextBuffer
+    from engram.server.db import ServerDB
+
+    db_path = project_root / ".engram" / "engram.db"
+    now = _utcnow()
+
+    if db_path.exists():
+        db = ServerDB(db_path)
+        fold_metrics = db.get_fold_telemetry(
+            since_7d=(now - timedelta(days=7)).isoformat(),
+            since_30d=(now - timedelta(days=30)).isoformat(),
+        )
+        buffer = ContextBuffer(config, project_root, db).get_fill_info()
+    else:
+        fold_metrics = {
+            "last_fold_at": None,
+            "folds_last_7d": 0,
+            "folds_last_30d": 0,
+        }
+        buffer = {
+            "fill_pct": 0.0,
+            "item_count": 0,
+        }
+
+    last_fold_at = fold_metrics["last_fold_at"]
+    last_fold_age_hours = None
+    if isinstance(last_fold_at, str):
+        last_fold_age_hours = round(
+            max((now - _parse_timestamp(last_fold_at)).total_seconds(), 0.0) / 3600,
+            1,
+        )
+
+    stats = {
+        "last_fold_at": last_fold_at,
+        "last_fold_age_hours": last_fold_age_hours,
+        "folds_last_7d": fold_metrics["folds_last_7d"],
+        "folds_last_30d": fold_metrics["folds_last_30d"],
+        "buffer_fill_pct": float(buffer["fill_pct"]),
+        "buffer_items": int(buffer["item_count"]),
+    }
+    stats.update(_collect_concept_counts(project_root, config))
+    return stats
+
+
 @cli.command()
 @click.option(
     "--project-root",
@@ -683,7 +779,13 @@ def run(project_root: str) -> None:
     default=".",
     help="Project root directory (default: cwd).",
 )
-def status(project_root: str) -> None:
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Output status as JSON.",
+)
+def status(project_root: str, as_json: bool) -> None:
     """Show engram server status."""
     from engram.config import load_config
     from engram.server import get_status
@@ -693,8 +795,15 @@ def status(project_root: str) -> None:
     info = get_status(config, root)
 
     if "error" in info:
-        click.echo(f"Error: {info['error']}")
+        if as_json:
+            _emit_json(info)
+        else:
+            click.echo(f"Error: {info['error']}")
         raise SystemExit(1)
+
+    if as_json:
+        _emit_json(info)
+        return
 
     # Buffer
     buf = info["buffer"]
@@ -736,6 +845,46 @@ def status(project_root: str) -> None:
         click.echo(f"\nLast poll: {state['last_poll_time']}")
     if state.get("last_dispatch_time"):
         click.echo(f"Last dispatch: {state['last_dispatch_time']}")
+
+
+@cli.command()
+@click.option(
+    "--project-root",
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    default=".",
+    help="Project root directory (default: cwd).",
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Output stats as JSON.",
+)
+def stats(project_root: str, as_json: bool) -> None:
+    """Show fold telemetry and concept registry health stats."""
+    from engram.config import load_config
+
+    root = Path(project_root)
+    config = load_config(root)
+    payload = _collect_stats(root, config)
+
+    if as_json:
+        _emit_json(payload)
+        return
+
+    click.echo("Fold telemetry:")
+    click.echo(f"  Last fold: {payload['last_fold_at'] or 'None'}")
+    click.echo(f"  Last fold age (hours): {payload['last_fold_age_hours']}")
+    click.echo(f"  Folds last 7d: {payload['folds_last_7d']}")
+    click.echo(f"  Folds last 30d: {payload['folds_last_30d']}")
+
+    click.echo("\nConcept registry:")
+    click.echo(f"  Active concepts: {payload['active_concepts']}")
+    click.echo(f"  Dead concepts: {payload['dead_concepts']}")
+
+    click.echo("\nBuffer:")
+    click.echo(f"  Fill %: {payload['buffer_fill_pct']}")
+    click.echo(f"  Items: {payload['buffer_items']}")
 
 
 @cli.command()

@@ -405,6 +405,37 @@ class ServerDB:
         finally:
             conn.close()
 
+    def get_fold_telemetry(
+        self,
+        since_7d: str,
+        since_30d: str,
+    ) -> dict[str, Any]:
+        """Return committed-fold telemetry for machine-readable stats output."""
+        conn = self._connect()
+        try:
+            row = conn.execute("""
+                SELECT
+                    MAX(CASE WHEN state = 'committed' THEN updated_at END) AS last_fold_at,
+                    COALESCE(
+                        SUM(CASE WHEN state = 'committed' AND updated_at >= ? THEN 1 ELSE 0 END),
+                        0
+                    ) AS folds_last_7d,
+                    COALESCE(
+                        SUM(CASE WHEN state = 'committed' AND updated_at >= ? THEN 1 ELSE 0 END),
+                        0
+                    ) AS folds_last_30d
+                FROM dispatches
+            """, (since_7d, since_30d)).fetchone()
+            if row is None:
+                return {
+                    "last_fold_at": None,
+                    "folds_last_7d": 0,
+                    "folds_last_30d": 0,
+                }
+            return dict(row)
+        finally:
+            conn.close()
+
     # ------------------------------------------------------------------
     # Server state
     # ------------------------------------------------------------------
