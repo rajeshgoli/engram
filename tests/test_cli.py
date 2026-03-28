@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
@@ -131,6 +133,84 @@ class TestBuildQueueCommand:
 
         assert result.exit_code == 0
         mock_refresh.assert_not_called()
+
+
+class TestJsonCommands:
+    def test_stats_json_reports_fold_telemetry_and_status_json(
+        self, runner: CliRunner, project_dir: Path,
+    ) -> None:
+        from engram.server.db import ServerDB
+
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        concepts = project_dir / "docs" / "decisions" / "concept_registry.md"
+        concepts.write_text(
+            "# Concept Registry\n\n"
+            "## C001: Active concept (ACTIVE)\n"
+            "**Code:** `engram/cli.py`\n\n"
+            "## C002: Old concept (DEAD) → concept_graveyard.md#C002\n",
+        )
+
+        db = ServerDB(project_dir / ".engram" / "engram.db")
+        committed_recent = db.create_dispatch(chunk_id=1)
+        db.update_dispatch_state(committed_recent, "committed")
+        committed_older = db.create_dispatch(chunk_id=2)
+        db.update_dispatch_state(committed_older, "committed")
+        db.create_dispatch(chunk_id=3)
+        db.add_buffer_item("docs/working/a.md", "doc", chars=42, date="2026-03-01T00:00:00Z")
+
+        now = datetime.now(timezone.utc)
+        recent_fold_at = now - timedelta(hours=2)
+        older_fold_at = now - timedelta(days=3)
+        with sqlite3.connect(project_dir / ".engram" / "engram.db") as conn:
+            conn.execute(
+                "UPDATE dispatches SET created_at = ?, updated_at = ? WHERE id = ?",
+                (recent_fold_at.isoformat(), recent_fold_at.isoformat(), committed_recent),
+            )
+            conn.execute(
+                "UPDATE dispatches SET created_at = ?, updated_at = ? WHERE id = ?",
+                (older_fold_at.isoformat(), older_fold_at.isoformat(), committed_older),
+            )
+            conn.commit()
+
+        result = runner.invoke(cli, ["stats", "--project-root", str(project_dir), "--json"])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["last_fold_at"] == recent_fold_at.isoformat()
+        assert 1.9 <= payload["last_fold_age_hours"] <= 2.1
+        assert payload["folds_last_7d"] == 2
+        assert payload["folds_last_30d"] == 2
+        assert payload["active_concepts"] == 1
+        assert payload["dead_concepts"] == 1
+        assert payload["buffer_items"] == 1
+        assert payload["buffer_fill_pct"] > 0
+
+        status_result = runner.invoke(cli, ["status", "--project-root", str(project_dir), "--json"])
+        assert status_result.exit_code == 0
+        status_payload = json.loads(status_result.output)
+        assert status_payload["buffer"]["item_count"] == 1
+        assert status_payload["last_dispatch"]["chunk_id"] == 3
+
+    def test_stats_json_reports_no_folds_for_empty_dispatch_table(
+        self, runner: CliRunner, project_dir: Path,
+    ) -> None:
+        init_result = runner.invoke(cli, ["init", "--project-root", str(project_dir)])
+        assert init_result.exit_code == 0
+
+        result = runner.invoke(cli, ["stats", "--project-root", str(project_dir), "--json"])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["last_fold_at"] is None
+        assert payload["last_fold_age_hours"] is None
+        assert payload["folds_last_7d"] == 0
+        assert payload["folds_last_30d"] == 0
+        assert payload["active_concepts"] == 0
+        assert payload["dead_concepts"] == 0
+        assert payload["buffer_fill_pct"] == 0.0
+        assert payload["buffer_items"] == 0
 
 
 class TestMigrateEpistemicHistory:
